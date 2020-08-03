@@ -8,29 +8,20 @@
 import React from 'react';
 import * as ReactDOM from 'react-dom';
 import PropTypes from 'prop-types';
-import classNames from 'classnames';
-import withStyles from '@material-ui/core/styles/withStyles';
 import Animator from '../../Utils/Animatior';
 import Sticker from './../Message/Media/Sticker';
-import { accentStyles, borderStyle } from '../Theme';
-import { ANIMATION_DURATION_200MS } from '../../Constants';
 import { StickerSourceEnum } from '../Message/Media/Sticker';
 import StickerStore from '../../Stores/StickerStore';
 import './StickersPickerHeader.css';
-
-const styles = theme => ({
-    ...borderStyle(theme),
-    ...accentStyles(theme)
-});
 
 class StickersPickerHeader extends React.Component {
     constructor(props) {
         super(props);
 
-        this.state = { position: 0 };
-
         this.scrollRef = React.createRef();
         this.anchorRef = React.createRef();
+
+        this.state = { position: 0 };
     }
 
     componentDidMount() {
@@ -38,7 +29,7 @@ class StickersPickerHeader extends React.Component {
     }
 
     componentWillUnmount() {
-        StickerStore.removeListener('clientUpdateStickerSetPosition', this.onClientUpdateStickerSetPosition);
+        StickerStore.off('clientUpdateStickerSetPosition', this.onClientUpdateStickerSetPosition);
     }
 
     onClientUpdateStickerSetPosition = update => {
@@ -62,10 +53,10 @@ class StickersPickerHeader extends React.Component {
         const anchorNode = ReactDOM.findDOMNode(anchor);
 
         const scrollFrom = scroll.scrollLeft;
-        const scrollTo = position * 44 - 147;
+        const scrollTo = position * 48 - 147;
 
         const anchorFrom = Number(anchorNode.style.left.replace('px', ''));
-        const anchorTo = position * 44;
+        const anchorTo = position * 48;
 
         if (animator) {
             animator.stop();
@@ -112,12 +103,13 @@ class StickersPickerHeader extends React.Component {
     };
 
     render() {
-        const { classes, stickers } = this.props;
+        const { stickers } = this.props;
 
         const items = stickers.map(x => (
             <Sticker
                 key={x.sticker.id}
                 className='stickers-picker-header-sticker'
+                style={{ width: 36, height: 36 }}
                 sticker={x}
                 play={false}
                 autoplay={false}
@@ -130,13 +122,10 @@ class StickersPickerHeader extends React.Component {
         ));
 
         return (
-            <div className={classNames('stickers-picker-header', classes.borderColor)}>
+            <div className='stickers-picker-header'>
                 <div ref={this.scrollRef} className='stickers-picker-header-scroll' onWheel={this.handleWheel}>
                     <div className='stickers-picker-header-items'>{items}</div>
-                    <div
-                        ref={this.anchorRef}
-                        className={classNames('stickers-picker-header-anchor', classes.accentBackgroundDark)}
-                    />
+                    <div ref={this.anchorRef} className='stickers-picker-header-anchor' />
                 </div>
             </div>
         );
@@ -148,4 +137,4 @@ StickersPickerHeader.propTypes = {
     onSelect: PropTypes.func.isRequired
 };
 
-export default withStyles(styles)(StickersPickerHeader);
+export default StickersPickerHeader;

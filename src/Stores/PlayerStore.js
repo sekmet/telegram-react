@@ -5,10 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { EventEmitter } from 'events';
-import Cookies from 'universal-cookie';
+import EventEmitter from './EventEmitter';
 import { getSearchMessagesFilter, openMedia } from '../Utils/Message';
-import { PLAYER_PLAYBACKRATE_NORMAL, PLAYER_VOLUME_NORMAL } from '../Constants';
+import { PLAYER_PLAYBACKRATE_MAX, PLAYER_PLAYBACKRATE_NORMAL, PLAYER_VOLUME_MAX, PLAYER_VOLUME_MIN, PLAYER_VOLUME_NORMAL } from '../Constants';
 import MessageStore from './MessageStore';
 import TdLibController from '../Controllers/TdLibController';
 import { getRandomInt } from '../Utils/Common';
@@ -25,43 +24,42 @@ class PlayerStore extends EventEmitter {
     constructor() {
         super();
 
-        const cookies = new Cookies();
-        let playbackRate = cookies.get('playbackRate');
-        let volume = cookies.get('volume');
-        playbackRate =
-            playbackRate && Number(playbackRate) >= 1 && Number(playbackRate) <= 2
-                ? Number(playbackRate)
-                : PLAYER_PLAYBACKRATE_NORMAL;
-        volume = volume && Number(volume) >= 0 && Number(volume) <= 1 ? Number(volume) : PLAYER_VOLUME_NORMAL;
-
-        this.playbackRate = playbackRate;
-        this.volume = volume;
-        this.repeat = RepeatEnum.NONE;
-        this.shuffle = false;
+        const { playbackRate, audioPlaybackRate, volume } = this.loadPlayerSettings();
 
         this.reset();
 
+        this.playbackRate = playbackRate;
+        this.audioPlaybackRate = audioPlaybackRate;
+        this.volume = volume;
+
         this.addTdLibListener();
-        this.setMaxListeners(Infinity);
     }
 
     reset = () => {
+        this.playbackRate = PLAYER_PLAYBACKRATE_NORMAL;
+        this.audioPlaybackRate = PLAYER_PLAYBACKRATE_NORMAL;
+        this.volume = PLAYER_VOLUME_NORMAL;
+        this.repeat = RepeatEnum.NONE;
+        this.shuffle = false;
+
         this.playlist = null;
         this.message = null;
         this.time = null;
         this.videoStream = null;
         this.instantView = null;
         this.pageBlock = null;
+        this.pipParams = { left: document.documentElement.clientWidth - 300, top: document.documentElement.clientHeight - 300 };
+        this.times = new Map();
     };
 
     addTdLibListener = () => {
-        TdLibController.addListener('update', this.onUpdate);
-        TdLibController.addListener('clientUpdate', this.onClientUpdate);
+        TdLibController.on('update', this.onUpdate);
+        TdLibController.on('clientUpdate', this.onClientUpdate);
     };
 
     removeTdLibListener = () => {
-        TdLibController.removeListener('update', this.onUpdate);
-        TdLibController.removeListener('clientUpdate', this.onClientUpdate);
+        TdLibController.off('update', this.onUpdate);
+        TdLibController.off('clientUpdate', this.onClientUpdate);
     };
 
     onUpdate = async update => {
@@ -90,10 +88,38 @@ class PlayerStore extends EventEmitter {
         });
     };
 
+    loadPlayerSettings() {
+        const player = JSON.parse(localStorage.getItem('player')) || {};
+
+        let { playbackRate, audioPlaybackRate, volume } = player;
+
+        playbackRate = +playbackRate;
+        audioPlaybackRate = +audioPlaybackRate;
+        volume = +volume;
+
+        playbackRate =
+            playbackRate >= PLAYER_PLAYBACKRATE_NORMAL && playbackRate <= PLAYER_PLAYBACKRATE_MAX
+                ? playbackRate
+                : PLAYER_PLAYBACKRATE_NORMAL;
+        audioPlaybackRate =
+            audioPlaybackRate >= PLAYER_PLAYBACKRATE_NORMAL && audioPlaybackRate <= PLAYER_PLAYBACKRATE_MAX
+                ? audioPlaybackRate
+                : PLAYER_PLAYBACKRATE_NORMAL;
+        volume = volume >= PLAYER_VOLUME_MIN && volume <= PLAYER_VOLUME_MAX ? volume : PLAYER_VOLUME_NORMAL;
+
+        return { playbackRate, audioPlaybackRate, volume };
+    }
+
+    savePlayerSettings() {
+        const { volume, playbackRate, audioPlaybackRate } = this;
+
+        localStorage.setItem('player', JSON.stringify({ volume, playbackRate, audioPlaybackRate }));
+    }
+
     onClientUpdate = update => {
         switch (update['@type']) {
             case 'clientUpdateMediaClose': {
-                this.reset();
+                // this.reset();
 
                 this.emit(update['@type'], update);
                 break;
@@ -121,8 +147,7 @@ class PlayerStore extends EventEmitter {
 
                 this.volume = volume;
 
-                const cookies = new Cookies();
-                cookies.set('volume', volume);
+                this.savePlayerSettings();
 
                 this.emit(update['@type'], update);
                 break;
@@ -148,8 +173,17 @@ class PlayerStore extends EventEmitter {
 
                 this.playbackRate = playbackRate;
 
-                const cookies = new Cookies();
-                cookies.set('playbackRate', playbackRate);
+                this.savePlayerSettings();
+
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaAudioPlaybackRate': {
+                const { audioPlaybackRate } = update;
+
+                this.audioPlaybackRate = audioPlaybackRate;
+
+                this.savePlayerSettings();
 
                 this.emit(update['@type'], update);
                 break;
@@ -167,6 +201,14 @@ class PlayerStore extends EventEmitter {
             case 'clientUpdateMediaPause': {
                 this.playing = false;
 
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaSeek': {
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaSeeking': {
                 this.emit(update['@type'], update);
                 break;
             }
@@ -203,13 +245,49 @@ class PlayerStore extends EventEmitter {
                 }
                 break;
             }
+            case 'clientUpdateMediaShortcut': {
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaHint': {
+                this.emit(update['@type'], update);
+                break;
+            }
             case 'clientUpdateMediaTime': {
-                const { duration, currentTime, timestamp } = update;
+                const { chatId, messageId, duration, currentTime, buffered, timestamp } = update;
+
+                if (this.time && this.time.chatId === chatId && this.time.messageId === messageId) {
+                    this.time = {
+                        ...this.time,
+                        currentTime,
+                        duration,
+                        buffered,
+                        timestamp
+                    };
+                }
+
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaProgress': {
+                const { chatId, messageId, buffered } = update;
+
+                if (this.time && this.time.chatId === chatId && this.time.messageId === messageId) {
+                    this.time = { ...this.time, buffered };
+                }
+
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdateMediaLoadedMetadata': {
+                const { chatId, messageId, duration, videoWidth, videoHeight } = update;
 
                 this.time = {
-                    currentTime: currentTime,
-                    duration: duration,
-                    timestamp: timestamp
+                    chatId,
+                    messageId,
+                    duration,
+                    videoWidth,
+                    videoHeight
                 };
 
                 this.emit(update['@type'], update);
@@ -246,6 +324,10 @@ class PlayerStore extends EventEmitter {
                 break;
             }
             case 'clientUpdateMediaPlaylistNext': {
+                this.emit(update['@type'], update);
+                break;
+            }
+            case 'clientUpdatePictureInPicture': {
                 this.emit(update['@type'], update);
                 break;
             }
@@ -319,6 +401,18 @@ class PlayerStore extends EventEmitter {
         }
 
         return false;
+    };
+
+    getCurrentTime = (uniqueId) => {
+        return this.times.get(uniqueId) || { currentTime: 0, duration: 0 };
+    };
+
+    setCurrentTime = (uniqueId, currentTime) => {
+        this.times.set(uniqueId, currentTime);
+    };
+
+    clearCurrentTime = (uniqueId) => {
+        this.times.delete(uniqueId);
     };
 
     getPlaylist = async (chatId, messageId) => {

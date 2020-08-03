@@ -7,6 +7,7 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
+import classNames from 'classnames';
 import RoomIcon from '@material-ui/icons/Room';
 import { getLocationId } from '../../../Utils/Message';
 import { getSrc } from '../../../Utils/File';
@@ -20,7 +21,7 @@ class Location extends React.Component {
     }
 
     componentWillUnmount() {
-        FileStore.removeListener('clientUpdateLocationBlob', this.onClientUpdateLocationBlob);
+        FileStore.off('clientUpdateLocationBlob', this.onClientUpdateLocationBlob);
     }
 
     onClientUpdateLocationBlob = update => {
@@ -36,8 +37,12 @@ class Location extends React.Component {
         }
     };
 
+    handleClick = event => {
+        event.stopPropagation();
+    };
+
     render() {
-        const { location, width, height, zoom, scale, style } = this.props;
+        const { location, width, height, zoom, scale, type, style, title, caption } = this.props;
         if (!location) return null;
 
         const locationId = getLocationId(location, width, height, zoom, scale);
@@ -54,8 +59,15 @@ class Location extends React.Component {
         };
 
         return (
-            <div className='location' style={locationStyle}>
-                <a href={source} target='_blank' rel='noopener noreferrer'>
+            <div
+                className={classNames('location', {
+                    'location-message': type === 'message',
+                    'location-venue': type === 'venue',
+                    'location-title': title,
+                    'location-caption': caption
+                })}
+                style={locationStyle}>
+                <a href={source} target='_blank' rel='noopener noreferrer' onClick={this.handleClick}>
                     <div className='location-wrapper'>
                         <img className='location-image' draggable={false} alt={source} src={src} />
                         <div className='location-icon'>

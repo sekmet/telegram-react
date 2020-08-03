@@ -9,8 +9,18 @@
 // importScripts('./tdweb.js');
 // importScripts('./subworkers.js');
 
-self.addEventListener('push', function(event) {
-    console.log(`[SW] Push received with data "${event.data.text()}"`);
+const STREAM_CHUNK_BIG_LIMIT = 700 * 1024 * 1024;
+const STREAM_CHUNK_VIDEO = 256 * 1024;
+const STREAM_CHUNK_VIDEO_BIG = 512 * 1024;
+const STREAM_CHUNK_AUDIO = 1024 * 1024;
+
+function LOG(message, ...optionalParams) {
+    return;
+    console.log(message, ...optionalParams);
+}
+
+self.addEventListener('push', event => {
+    LOG(`[SW] Push received with data "${event.data.text()}"`);
 
     let obj;
     try{
@@ -32,6 +42,203 @@ self.addEventListener('push', function(event) {
         //loadUpdates()
         self.registration.showNotification(title, options)
     );
+});
+
+function isSafari() {
+    const is_safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    LOG('[stream] isSafari', is_safari);
+    return is_safari;
+
+}
+
+function parseRange(header) {
+    const [, chunks] = header.split('=');
+    const ranges = chunks.split(', ');
+    const [start, end] = ranges[0].split('-');
+
+    return [+start, +end || 0];
+}
+
+function getOffsetLimit(start, end, chunk, size) {
+    end = end > 0 && end < start + chunk - 1 ? end : start + chunk - 1;
+    end = end > size - 1 ? size - 1 : end;
+
+    const offset = start;
+    const limit = end - start + 1;
+
+    return [ offset, limit ];
+}
+
+function getChunk(mimeType, size) {
+    const isBigFile = size > STREAM_CHUNK_BIG_LIMIT;
+
+    let chunk = isBigFile ? STREAM_CHUNK_VIDEO_BIG : STREAM_CHUNK_VIDEO;
+    if (mimeType && mimeType.startsWith('audio')) {
+        chunk = STREAM_CHUNK_AUDIO;
+    }
+
+    return chunk;
+}
+
+function fetchStreamRequest(url, start, end, resolve, get) {
+
+    const { searchParams } = new URL(url, 'https://telegram.org');
+    const fileId = parseInt(searchParams.get('id'), 10);
+    const size = parseInt(searchParams.get('size'), 10);
+    const mimeType = searchParams.get('mime_type') || 'video/mp4';
+
+    const info = { url, options: { fileId, size, mimeType } };
+
+    LOG('[stream] fetchStreamRequest', url, info);
+
+    // safari workaround
+    if (start === 0 && end === 1) {
+        resolve(new Response(new Uint8Array(2).buffer, {
+            status: 206,
+            statusText: 'Partial Content',
+            headers: {
+                'Accept-Ranges': 'bytes',
+                'Content-Range': `bytes 0-1/${size || '*'}`,
+                'Content-Length': '2',
+                'Content-Type': mimeType
+            },
+        }));
+        return;
+    }
+
+    const chunk = getChunk(mimeType, size);
+    const [ offset, limit ] = getOffsetLimit(start, end, chunk, size);
+
+    LOG(`[stream] get offset=${offset} limit=${limit}`);
+    get(fileId, offset, limit, start, end, async ([blob, error]) => {
+        if (error) {
+            resolve(new Response(null, {
+                status: 416,
+                statusText: 'Range Not Satisfiable'
+            }));
+            return;
+        }
+
+
+        const headers = {
+            'Accept-Ranges': 'bytes',
+            'Content-Range': `bytes ${offset}-${offset + blob.size - 1}/${size || '*'}`,
+            'Content-Length': `${blob.size}`,
+            'Content-Type': mimeType
+        };
+
+        // if (isSafari()) {
+        //     let ab = await getArrayBuffer(blob);
+        //     ab = ab.slice(start - offset, end - offset + 1);
+        //
+        //     headers['Content-Range'] = `bytes ${start}-${start + ab.byteLength - 1}/${size || '*'}`;
+        //     headers['Content-Length'] = `${ab.byteLength}`;
+        //
+        //     blob = ab;
+        // }
+
+        resolve(new Response(blob, {
+            status: 206,
+            statusText: 'Partial Content',
+            headers,
+        }));
+    });
+}
+
+async function getFilePartRequest(fileId, offset, limit, start, end, ready) {
+
+    LOG('[stream] getFilePartRequest', fileId, offset, limit);
+    const [data, error] = await getBufferFromClientAsync(fileId, offset, limit, start, end);
+
+    ready([data, error]);
+}
+
+self.addEventListener('fetch', event => {
+    const [, url, scope] = /http[:s]+\/\/.*?(\/(.*?)\/.*$)/.exec(event.request.url) || [];
+
+    switch (scope) {
+        case 'streaming': {
+            const [start, end] = parseRange(event.request.headers.get('Range') || '');
+
+            LOG(`[SW] fetch stream start=${start} end=${end}`, event.request.url, scope);
+
+            event.respondWith(new Promise((resolve) => {
+                fetchStreamRequest(url, start, end, resolve, getFilePartRequest);
+            }));
+            break;
+        }
+    }
+});
+
+const queue = new Map();
+
+async function getBufferFromClientAsync(fileId, offset, limit, start, end) {
+    return new Promise((resolve, reject) => {
+
+        const key = `${fileId}_${offset}_${limit}`;
+        queue.set(key, { resolve, reject });
+        self.clients.matchAll().then(clients => {
+            clients.forEach(client => {
+                LOG('[stream] getBufferFromClientAsync', fileId, offset, limit, client);
+                client.postMessage({
+                    '@type': 'getFile',
+                    fileId,
+                    offset,
+                    limit,
+                    start,
+                    end
+                });
+            });
+        })
+    });
+}
+
+async function getArrayBuffer(blob) {
+    return new Promise((resolve) => {
+        let fr = new FileReader();
+        fr.onload = () => {
+            resolve(fr.result);
+        };
+        fr.readAsArrayBuffer(blob);
+    })
+}
+
+self.addEventListener('message', async e => {
+    LOG('[stream] sw.message', e.data);
+    switch (e.data['@type']) {
+        case 'getFileResult': {
+            const { fileId, offset, limit, data } = e.data;
+            const key = `${fileId}_${offset}_${limit}`;
+            const request = queue.get(key);
+            LOG('[stream] sw.message request', request, queue, e.data);
+            if (request) {
+                queue.delete(key);
+                const { resolve } = request;
+
+                // const buffer = await getArrayBuffer(data);
+
+                LOG('[stream] sw.message resolve', data);
+                resolve([data, null]);
+            }
+            break;
+        }
+        case 'getFileError': {
+            const { fileId, offset, limit, error } = e.data;
+            const key = `${fileId}_${offset}_${limit}`;
+            const request = queue.get(key);
+            LOG('[stream] sw.message request', request, queue, e.data);
+            if (request) {
+                queue.delete(key);
+                const { resolve } = request;
+
+                // const buffer = await getArrayBuffer(data);
+
+                LOG('[stream] sw.message resolve', error);
+                resolve([null, error]);
+            }
+            break;
+        }
+    }
 });
 
 // function loadUpdates(){

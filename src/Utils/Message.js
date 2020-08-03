@@ -6,46 +6,92 @@
  */
 
 import React from 'react';
-import dateFormat from 'dateformat';
 import emojiRegex from 'emoji-regex';
-import Audio from '../Components/Message/Media/Audio';
-import Animation from '../Components/Message/Media/Animation';
-import Contact from '../Components/Message/Media/Contact';
-import Document from '../Components/Message/Media/Document';
-import Game from '../Components/Message/Media/Game';
-import Location from '../Components/Message/Media/Location';
 import MentionLink from '../Components/Additional/MentionLink';
-import Photo from '../Components/Message/Media/Photo';
 import Poll from '../Components/Message/Media/Poll';
 import SafeLink from '../Components/Additional/SafeLink';
-import Sticker, { StickerSourceEnum } from '../Components/Message/Media/Sticker';
-import Venue from '../Components/Message/Media/Venue';
-import Video from '../Components/Message/Media/Video';
-import VideoNote from '../Components/Message/Media/VideoNote';
-import VoiceNote from '../Components/Message/Media/VoiceNote';
+import dateFormat from '../Utils/Date';
 import { searchChat, setMediaViewerContent } from '../Actions/Client';
-import {
-    getChatDisableMentionNotifications,
-    getChatDisablePinnedMessageNotifications,
-    getChatTitle,
-    isChatMuted
-} from './Chat';
+import { getChatTitle, isMeChat } from './Chat';
 import { openUser } from './../Actions/Client';
-import { getPhotoSize } from './Common';
-import { download, saveOrDownload } from './File';
+import { getFitSize, getPhotoSize, getSize } from './Common';
+import { download, saveOrDownload, supportsStreaming } from './File';
 import { getAudioTitle } from './Media';
 import { getDecodedUrl } from './Url';
 import { getServiceMessageContent } from './ServiceMessage';
 import { getUserFullName } from './User';
-import { LOCATION_HEIGHT, LOCATION_SCALE, LOCATION_WIDTH, LOCATION_ZOOM } from '../Constants';
+import { LOCATION_HEIGHT, LOCATION_SCALE, LOCATION_WIDTH, LOCATION_ZOOM, PHOTO_DISPLAY_SIZE, PHOTO_SIZE, PLAYER_AUDIO_2X_MIN_DURATION } from '../Constants';
 import AppStore from '../Stores/ApplicationStore';
 import ChatStore from '../Stores/ChatStore';
 import FileStore from '../Stores/FileStore';
 import MessageStore from '../Stores/MessageStore';
+import PlayerStore from '../Stores/PlayerStore';
 import UserStore from '../Stores/UserStore';
 import TdLibController from '../Controllers/TdLibController';
 
-function getAuthor(message) {
+export function isMetaBubble(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) {
+        return false;
+    }
+
+    const { content } = message;
+    if (!content) {
+        return false;
+    }
+
+    const { caption } = content;
+    if (caption && caption.text && caption.text.length > 0) {
+        return false;
+    }
+
+    switch (content['@type']) {
+        case 'messageAnimation': {
+            return true;
+        }
+        case 'messageLocation': {
+            return true;
+        }
+        case 'messagePhoto': {
+            return true;
+        }
+        case 'messageSticker': {
+            return true;
+        }
+        case 'messageVideo': {
+            return true;
+        }
+        case 'messageVideoNote': {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+export function isMessageUnread(chatId, messageId) {
+    const chat = ChatStore.get(chatId);
+    if (!chat) {
+        return false;
+    }
+
+    const { last_read_inbox_message_id, last_read_outbox_message_id } = chat;
+
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) {
+        return false;
+    }
+
+    const { id, is_outgoing } = message;
+    const isMe = isMeChat(chatId);
+    if (is_outgoing && isMe) {
+        return false;
+    }
+
+    return is_outgoing ? id > last_read_outbox_message_id : id > last_read_inbox_message_id;
+}
+
+function getAuthor(message, t = k => k) {
     if (!message) return null;
 
     const { forward_info } = message;
@@ -56,7 +102,7 @@ function getAuthor(message) {
                 if (forward_info.sender_user_id > 0) {
                     const user = UserStore.get(forward_info.sender_user_id);
                     if (user) {
-                        return getUserFullName(user);
+                        return getUserFullName(forward_info.sender_user_id, null, t);
                     }
                 }
                 break;
@@ -71,10 +117,10 @@ function getAuthor(message) {
         }
     }
 
-    return getTitle(message);
+    return getTitle(message, t);
 }
 
-function getTitle(message) {
+function getTitle(message, t = k => k) {
     if (!message) return null;
 
     const { sender_user_id, chat_id } = message;
@@ -82,7 +128,7 @@ function getTitle(message) {
     if (sender_user_id) {
         const user = UserStore.get(sender_user_id);
         if (user) {
-            return getUserFullName(user);
+            return getUserFullName(sender_user_id, null, t);
         }
     }
 
@@ -118,41 +164,54 @@ function searchCurrentChat(event, text) {
     searchChat(chatId, text);
 }
 
-function getFormattedText(text) {
-    if (text['@type'] !== 'formattedText') return null;
-    if (!text.text) return null;
-    if (!text.entities) return text.text;
+function getFormattedText(formattedText, t = k => k) {
+    if (formattedText['@type'] !== 'formattedText') return null;
 
-    let removeNewLineAfterPre = false;
+    const { text, entities } = formattedText;
+    if (!text) return null;
+    if (!entities) return text;
+    if (!entities.length) return text;
+
+    let deleteLineBreakAfterPre = false;
     let result = [];
     let index = 0;
-    for (let i = 0; i < text.entities.length; i++) {
-        let beforeEntityText = substring(text.text, index, text.entities[i].offset);
-        if (beforeEntityText) {
-            result.push(beforeEntityText);
+    for (let i = 0; i < entities.length; i++) {
+        const entity = entities[i];
+        const { offset, length, type } = entity;
+
+        // skip nested entities
+        if (index > offset) {
+            continue;
         }
 
-        let entityText = substring(
-            text.text,
-            text.entities[i].offset,
-            text.entities[i].offset + text.entities[i].length
-        );
-        if (removeNewLineAfterPre && entityText.length > 0 && entityText[0] === '\n') {
+        let textBefore = substring(text, index, offset);
+        const textBeforeLength = textBefore.length;
+        if (textBefore) {
+            if (deleteLineBreakAfterPre && textBefore.length > 0 && textBefore[0] === '\n') {
+                textBefore = textBefore.substr(1);
+                deleteLineBreakAfterPre = false;
+            }
+            if (textBefore) {
+                result.push(textBefore);
+            }
+        }
+
+        const entityKey = offset;
+        let entityText = substring(text, offset, offset + length);
+        if (deleteLineBreakAfterPre && entityText.length > 0 && entityText[0] === '\n') {
             entityText = entityText.substr(1);
+            deleteLineBreakAfterPre = false;
         }
 
-        switch (text.entities[i].type['@type']) {
+        switch (type['@type']) {
             case 'textEntityTypeBold': {
-                result.push(<strong key={text.entities[i].offset}>{entityText}</strong>);
+                result.push(<strong key={entityKey}>{entityText}</strong>);
                 break;
             }
             case 'textEntityTypeBotCommand': {
                 const command = entityText.length > 0 && entityText[0] === '/' ? substring(entityText, 1) : entityText;
                 result.push(
-                    <a
-                        key={text.entities[i].offset}
-                        onClick={stopPropagation}
-                        href={`tg://bot_command?command=${command}&bot=`}>
+                    <a key={entityKey} onClick={stopPropagation} href={`tg://bot_command?command=${command}&bot=`}>
                         {entityText}
                     </a>
                 );
@@ -160,20 +219,20 @@ function getFormattedText(text) {
             }
             case 'textEntityTypeCashtag': {
                 result.push(
-                    <a key={text.entities[i].offset} onClick={event => searchCurrentChat(event, entityText)}>
+                    <a key={entityKey} onClick={event => searchCurrentChat(event, entityText)}>
                         {entityText}
                     </a>
                 );
                 break;
             }
             case 'textEntityTypeCode': {
-                result.push(<code key={text.entities[i].offset}>{entityText}</code>);
+                result.push(<code key={entityKey}>{entityText}</code>);
                 break;
             }
             case 'textEntityTypeEmailAddress': {
                 result.push(
                     <a
-                        key={text.entities[i].offset}
+                        key={entityKey}
                         href={`mailto:${entityText}`}
                         onClick={stopPropagation}
                         target='_blank'
@@ -185,23 +244,19 @@ function getFormattedText(text) {
             }
             case 'textEntityTypeHashtag': {
                 result.push(
-                    <a key={text.entities[i].offset} onClick={event => searchCurrentChat(event, entityText)}>
+                    <a key={entityKey} onClick={event => searchCurrentChat(event, entityText)}>
                         {entityText}
                     </a>
                 );
                 break;
             }
             case 'textEntityTypeItalic': {
-                result.push(<em key={text.entities[i].offset}>{entityText}</em>);
+                result.push(<em key={entityKey}>{entityText}</em>);
                 break;
             }
             case 'textEntityTypeMentionName': {
-                const user = UserStore.get(text.entities[i].type.user_id);
                 result.push(
-                    <MentionLink
-                        key={text.entities[i].offset}
-                        userId={text.entities[i].type.user_id}
-                        title={getUserFullName(user)}>
+                    <MentionLink key={entityKey} userId={type.user_id} title={getUserFullName(type.user_id, null, t)}>
                         {entityText}
                     </MentionLink>
                 );
@@ -209,7 +264,7 @@ function getFormattedText(text) {
             }
             case 'textEntityTypeMention': {
                 result.push(
-                    <MentionLink key={text.entities[i].offset} username={entityText}>
+                    <MentionLink key={entityKey} username={entityText}>
                         {entityText}
                     </MentionLink>
                 );
@@ -217,35 +272,31 @@ function getFormattedText(text) {
             }
             case 'textEntityTypePhoneNumber': {
                 result.push(
-                    <a key={text.entities[i].offset} href={`tel:${entityText}`} onClick={stopPropagation}>
+                    <a key={entityKey} href={`tel:${entityText}`} onClick={stopPropagation}>
                         {entityText}
                     </a>
                 );
                 break;
             }
             case 'textEntityTypePre': {
-                result.push(<pre key={text.entities[i].offset}>{entityText}</pre>);
-                removeNewLineAfterPre = true;
+                result.push(<pre key={entityKey}>{entityText}</pre>);
+                deleteLineBreakAfterPre = true;
                 break;
             }
             case 'textEntityTypePreCode': {
                 result.push(
-                    <pre key={text.entities[i].offset}>
+                    <pre key={entityKey}>
                         <code>{entityText}</code>
                     </pre>
                 );
-                removeNewLineAfterPre = true;
+                deleteLineBreakAfterPre = true;
                 break;
             }
             case 'textEntityTypeTextUrl': {
-                let url = entityText;
-                const { url: typeUrl } = text.entities[i].type;
-                if (typeUrl) {
-                    url = typeUrl;
-                }
+                const url = type.url ? type.url : entityText;
 
                 result.push(
-                    <SafeLink key={text.entities[i].offset} url={url}>
+                    <SafeLink key={entityKey} url={url}>
                         {entityText}
                     </SafeLink>
                 );
@@ -253,7 +304,7 @@ function getFormattedText(text) {
             }
             case 'textEntityTypeUrl': {
                 result.push(
-                    <SafeLink key={text.entities[i].offset} url={entityText}>
+                    <SafeLink key={entityKey} url={entityText}>
                         {entityText}
                     </SafeLink>
                 );
@@ -264,42 +315,42 @@ function getFormattedText(text) {
                 break;
         }
 
-        index += beforeEntityText.length + entityText.length;
+        index += textBeforeLength + entity.length;
     }
 
-    if (index < text.text.length) {
-        let afterEntityText = text.text.substring(index);
-        if (removeNewLineAfterPre && afterEntityText.length > 0 && afterEntityText[0] === '\n') {
-            afterEntityText = afterEntityText.substr(1);
+    if (index < text.length) {
+        let textAfter = text.substring(index);
+        if (deleteLineBreakAfterPre && textAfter.length > 0 && textAfter[0] === '\n') {
+            textAfter = textAfter.substr(1);
         }
-        if (afterEntityText) {
-            result.push(afterEntityText);
+        if (textAfter) {
+            result.push(textAfter);
         }
     }
 
     return result;
 }
 
-function getText(message) {
+function getText(message, meta, t = k => k) {
     if (!message) return null;
 
     let result = [];
 
     const { content } = message;
-    if (!content) return result;
+    if (!content) return [...result, meta];
 
     const { text, caption } = content;
 
     if (text && text['@type'] === 'formattedText' && text.text) {
-        result = getFormattedText(text);
+        result = getFormattedText(text, t);
     } else if (caption && caption['@type'] === 'formattedText' && caption.text) {
-        const formattedText = getFormattedText(caption);
+        const formattedText = getFormattedText(caption, t);
         if (formattedText) {
             result = result.concat(formattedText);
         }
     }
 
-    return result;
+    return result && result.length > 0 ? [...result, meta] : [];
 }
 
 function getWebPage(message) {
@@ -322,54 +373,6 @@ function getDateHint(date) {
 
     const d = new Date(date * 1000);
     return dateFormat(d, 'H:MM:ss d.mm.yyyy'); //date.toDateString();
-}
-
-function getMedia(message, openMedia) {
-    if (!message) return null;
-
-    const { chat_id, id, content } = message;
-    if (!content) return null;
-
-    switch (content['@type']) {
-        case 'messageAnimation':
-            return <Animation chatId={chat_id} messageId={id} animation={content.animation} openMedia={openMedia} />;
-        case 'messageAudio':
-            return <Audio chatId={chat_id} messageId={id} audio={content.audio} openMedia={openMedia} />;
-        case 'messageContact':
-            return <Contact chatId={chat_id} messageId={id} contact={content.contact} openMedia={openMedia} />;
-        case 'messageDocument':
-            return <Document chatId={chat_id} messageId={id} document={content.document} openMedia={openMedia} />;
-        case 'messageGame':
-            return <Game chatId={chat_id} messageId={id} game={content.game} openMedia={openMedia} />;
-        case 'messageLocation':
-            return <Location chatId={chat_id} messageId={id} location={content.location} openMedia={openMedia} />;
-        case 'messagePhoto':
-            return <Photo chatId={chat_id} messageId={id} photo={content.photo} openMedia={openMedia} />;
-        case 'messagePoll':
-            return <Poll chatId={chat_id} messageId={id} poll={content.poll} openMedia={openMedia} />;
-        case 'messageSticker':
-            return (
-                <Sticker
-                    chatId={chat_id}
-                    messageId={id}
-                    sticker={content.sticker}
-                    source={StickerSourceEnum.MESSAGE}
-                    openMedia={openMedia}
-                />
-            );
-        case 'messageText':
-            return null;
-        case 'messageVenue':
-            return <Venue chatId={chat_id} messageId={id} venue={content.venue} openMedia={openMedia} />;
-        case 'messageVideo':
-            return <Video chatId={chat_id} messageId={id} video={content.video} openMedia={openMedia} />;
-        case 'messageVideoNote':
-            return <VideoNote chatId={chat_id} messageId={id} videoNote={content.video_note} openMedia={openMedia} />;
-        case 'messageVoiceNote':
-            return <VoiceNote chatId={chat_id} messageId={id} voiceNote={content.voice_note} openMedia={openMedia} />;
-        default:
-            return '[' + content['@type'] + ']';
-    }
 }
 
 function isForwardOriginHidden(forwardInfo) {
@@ -403,8 +406,7 @@ function getForwardTitle(forwardInfo, t = key => key) {
         case 'messageForwardOriginUser': {
             const { sender_user_id } = origin;
 
-            const user = UserStore.get(sender_user_id);
-            return getUserFullName(user);
+            return getUserFullName(sender_user_id, null, t);
         }
         case 'messageForwardOriginHiddenUser': {
             const { sender_name } = origin;
@@ -723,7 +725,7 @@ function isContentOpened(chatId, messageId) {
     }
 }
 
-function getMediaTitle(message) {
+function getMediaTitle(message, t = k => k) {
     if (!message) return null;
 
     const { content } = message;
@@ -749,10 +751,10 @@ function getMediaTitle(message) {
         }
     }
 
-    return getAuthor(message);
+    return getAuthor(message, t);
 }
 
-function hasAudio(chatId, messageId) {
+export function hasVoice(chatId, messageId) {
     const message = MessageStore.get(chatId, messageId);
     if (!message) return false;
 
@@ -760,9 +762,9 @@ function hasAudio(chatId, messageId) {
     if (!content) return false;
 
     switch (content['@type']) {
-        case 'messageAudio': {
-            const { audio } = content;
-            if (audio) {
+        case 'messageVoiceNote': {
+            const { voice_note } = content;
+            if (voice_note) {
                 return true;
             }
 
@@ -771,8 +773,8 @@ function hasAudio(chatId, messageId) {
         case 'messageText': {
             const { web_page } = content;
             if (web_page) {
-                const { audio } = web_page;
-                if (audio) {
+                const { voice_note } = web_page;
+                if (voice_note) {
                     return true;
                 }
             }
@@ -782,6 +784,44 @@ function hasAudio(chatId, messageId) {
     }
 
     return false;
+}
+
+export function useAudioPlaybackRate(chatId, messageId) {
+    const audio = getMessageAudio(chatId, messageId);
+
+    return audio && audio.duration > PLAYER_AUDIO_2X_MIN_DURATION;
+}
+
+export function getMessageAudio(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return null;
+
+    const { content } = message;
+    if (!content) return null;
+
+    switch (content['@type']) {
+        case 'messageAudio': {
+            const { audio } = content;
+
+            return audio;
+        }
+        case 'messageText': {
+            const { web_page } = content;
+            if (web_page) {
+                const { audio } = web_page;
+
+                return audio;
+            }
+
+            break;
+        }
+    }
+
+    return null;
+}
+
+function hasAudio(chatId, messageId) {
+    return Boolean(getMessageAudio(chatId, messageId));
 }
 
 function hasVideoNote(chatId, messageId) {
@@ -937,14 +977,16 @@ function openAudio(audio, message, fileCancel) {
     if (!file) return;
 
     file = FileStore.get(file.id) || file;
-    if (fileCancel && file.local.is_downloading_active) {
+    if (fileCancel && file.local.is_downloading_active && !supportsStreaming()) {
         FileStore.cancelGetRemoteFile(file.id, message);
         return;
     } else if (fileCancel && file.remote.is_uploading_active) {
         FileStore.cancelUploadFile(file.id, message);
         return;
     } else {
-        download(file, message, () => FileStore.updateAudioBlob(chat_id, id, file.id));
+        if (!supportsStreaming()) {
+            download(file, message, () => FileStore.updateAudioBlob(chat_id, id, file.id));
+        }
     }
 
     TdLibController.send({
@@ -953,10 +995,16 @@ function openAudio(audio, message, fileCancel) {
         message_id: id
     });
 
+    const { remote } = file;
+    const { unique_id } = remote;
+    const { currentTime, duration } = PlayerStore.getCurrentTime(unique_id);
+
     TdLibController.clientUpdate({
         '@type': 'clientUpdateMediaActive',
         chatId: chat_id,
-        messageId: id
+        messageId: id,
+        currentTime,
+        duration
     });
 }
 
@@ -1007,7 +1055,7 @@ function openContact(contact, message, fileCancel) {
         message_id: id
     });
 
-    openUser(contact.userId);
+    openUser(contact.user_id, true);
 }
 
 function openDocument(document, message, fileCancel) {
@@ -1205,10 +1253,16 @@ function openVideoNote(videoNote, message, fileCancel) {
         message_id: id
     });
 
+    const { remote } = file;
+    const { unique_id } = remote;
+    const { currentTime, duration } = PlayerStore.getCurrentTime(unique_id);
+
     TdLibController.clientUpdate({
         '@type': 'clientUpdateMediaActive',
         chatId: chat_id,
-        messageId: id
+        messageId: id,
+        currentTime,
+        duration
     });
 }
 
@@ -1238,10 +1292,16 @@ function openVoiceNote(voiceNote, message, fileCancel) {
         message_id: id
     });
 
+    const { remote } = file;
+    const { unique_id } = remote;
+    const { currentTime, duration } = PlayerStore.getCurrentTime(unique_id);
+
     TdLibController.clientUpdate({
         '@type': 'clientUpdateMediaActive',
         chatId: chat_id,
-        messageId: id
+        messageId: id,
+        currentTime,
+        duration
     });
 }
 
@@ -1264,6 +1324,7 @@ function openMedia(chatId, messageId, fileCancel = true) {
         case 'messageAudio': {
             const { audio } = content;
             if (audio) {
+                // openDocument(audio, message, fileCancel);
                 openAudio(audio, message, fileCancel);
             }
 
@@ -1386,6 +1447,116 @@ function openMedia(chatId, messageId, fileCancel = true) {
 
 function isDeletedMessage(message) {
     return message && message['@type'] === 'deletedMessage';
+}
+
+export function getReplyMinithumbnail(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return;
+
+    const { content } = message;
+    if (!content) return null;
+
+    switch (content['@type']) {
+        case 'messageAnimation': {
+            const { animation } = content;
+            if (!animation) return null;
+
+            const { minithumbnail } = animation;
+            return minithumbnail || null;
+        }
+        case 'messageAudio': {
+            return null;
+        }
+        case 'messageChatChangePhoto': {
+            const { photo } = content;
+            if (!photo) return null;
+
+            return photo.minithumbnail || null;
+        }
+        case 'messageDocument': {
+            const { document } = content;
+            if (!document) return null;
+
+            const { minithumbnail } = document;
+            return minithumbnail || null;
+        }
+        case 'messageGame': {
+            const { game } = content;
+            if (!game) return null;
+
+            const { animation, photo } = game;
+            if (animation) {
+                const { minithumbnail } = animation;
+                if (minithumbnail) {
+                    return minithumbnail;
+                }
+            }
+
+            if (photo) {
+                return photo.minithumbnail || null;
+            }
+
+            return null;
+        }
+        case 'messagePhoto': {
+            const { photo } = content;
+            if (!photo) return null;
+
+            return photo.minithumbnail || null;
+        }
+        case 'messageSticker': {
+            return null;
+        }
+        case 'messageText': {
+            const { web_page } = content;
+            if (web_page) {
+                const { animation, audio, document, photo, sticker, video, video_note } = web_page;
+                if (photo) {
+                    return photo.minithumbnail || null;
+                }
+                if (animation) {
+                    const { minithumbnail } = animation;
+                    return minithumbnail || null;
+                }
+                if (audio) {
+                    return null;
+                }
+                if (document) {
+                    const { minithumbnail } = document;
+                    return minithumbnail || null;
+                }
+                if (sticker) {
+                    return null;
+                }
+                if (video) {
+                    const { minithumbnail } = video;
+                    return minithumbnail || null;
+                }
+                if (video_note) {
+                    const { minithumbnail } = video_note;
+                    return minithumbnail || null;
+                }
+            }
+
+            break;
+        }
+        case 'messageVideo': {
+            const { video } = content;
+            if (!video) return null;
+
+            const { minithumbnail } = video;
+            return minithumbnail || null;
+        }
+        case 'messageVideoNote': {
+            const { video_note } = content;
+            if (!video_note) return null;
+
+            const { minithumbnail } = video_note;
+            return minithumbnail || null;
+        }
+    }
+
+    return null;
 }
 
 function getReplyPhotoSize(chatId, messageId) {
@@ -1559,27 +1730,6 @@ function messageComparatorDesc(left, right) {
     return left.id - right.id;
 }
 
-export function hasMention(message) {
-    return message && message.contains_unread_mention;
-}
-
-export function hasPinnedMessage(message) {
-    return message && message.content['@type'] === 'messagePinMessage';
-}
-
-export function isMessageMuted(message) {
-    const { chat_id } = message;
-
-    if (hasMention(message)) {
-        return getChatDisableMentionNotifications(chat_id);
-    }
-    if (hasPinnedMessage(message)) {
-        return getChatDisablePinnedMessageNotifications(chat_id);
-    }
-
-    return isChatMuted(chat_id);
-}
-
 function checkInclusion(index, entities) {
     if (!entities) return false;
     if (!entities.length) return false;
@@ -1625,6 +1775,17 @@ function removeOffsetAfter(start, countToRemove, entities) {
     });
 }
 
+function addOffsetAfter(start, countToAdd, entities) {
+    if (!entities) return;
+    if (!entities.length) return;
+
+    entities.forEach(e => {
+        if (e.offset > start) {
+            e.offset += countToAdd;
+        }
+    });
+}
+
 function removeEntities(startIndex, endIndex, entities) {
     if (!entities) return;
     if (!entities.length) return;
@@ -1648,7 +1809,7 @@ function addTextNode(offset, length, text, nodes) {
     nodes.push(node);
 }
 
-export function getNodes(text, entities) {
+export function getNodes(text, entities, t = k => k) {
     if (!text) return [];
 
     entities = (entities || []).sort((a, b) => {
@@ -1714,9 +1875,9 @@ export function getNodes(text, entities) {
                         if (user) {
                             const node = document.createElement('a');
                             // node.href = getDecodedUrl(url, false);
-                            node.title = getUserFullName(user);
+                            node.title = getUserFullName(user_id, null, t);
                             // node.target = '_blank';
-                            // node.rel = 'noopener norefferer';
+                            // node.rel = 'noopener noreferrer';
                             node.dataset.userId = user_id;
                             node.innerText = text.substr(x.offset, x.length);
                             nodes.push(node);
@@ -1750,7 +1911,7 @@ export function getNodes(text, entities) {
                         node.href = getDecodedUrl(url, false);
                         node.title = getDecodedUrl(url, false);
                         node.target = '_blank';
-                        node.rel = 'noopener norefferer';
+                        node.rel = 'noopener noreferrer';
                         node.innerText = text.substr(x.offset, x.length);
                         nodes.push(node);
                     } catch {
@@ -1786,23 +1947,175 @@ export function getEntities(text) {
     const entities = [];
     if (!text) return { text, entities };
 
+    text = text.replace(/<div><br><\/div>/gi, '<br>');
+    text = text.replace(/<div>/gi, '<br>');
+    text = text.replace(/<\/div>/gi, '');
     text = text.split('<br>').join('\n');
 
-    console.log(`[ge] start text=${text}`);
-
-    let index = -1; // first index of end tag
-    let lastIndex = 0; // last index of end tag
-    let start = -1; // first index of start tag
-    let isPre = false;
-    const mono = '`';
-    const pre = '```';
-    const bold = '**';
-    const italic = '__';
-
     // 0 looking for html entities
+    text = getHTMLEntities(text, entities);
+
+    // 1 looking for ``` and ` in order to find mono and pre entities
+    text = getMonoPreEntities(text, entities);
+
+    // 2 looking for bold, italic entities
+    text = getBoldItalicEntities(text, entities);
+
+    return { text, entities };
+}
+
+function compareEntities(a, b) {
+    const { offset: offsetA } = a;
+    const { offset: offsetB } = b;
+
+    if (offsetA < offsetB) {
+        return -1;
+    }
+
+    if (offsetA > offsetB) {
+        return 1;
+    }
+
+    return 0;
+}
+
+export function getUrlMentionHashtagEntities(text, entities) {
+    const { text: t1, entities: e1 } = getUrlEntities(text, entities);
+
+    const { text: t2, entities: e2 } = getMentionHashtagEntities(t1, e1);
+
+    return { text: t2, entities: e2 };
+}
+
+const urlRegExp = /((ftp|http|https):\/\/)?([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?/g;
+
+export function getUrlEntities(text, entities) {
+    let e = [];
+    const regExp = urlRegExp;
+    let result = regExp.exec(text);
+    while (result) {
+        const { index: offset } = result;
+        const length = result[0].length;
+
+        e.push({
+            '@type': 'textEntity',
+            type: { '@type': 'textEntityTypeUrl' },
+            length,
+            offset
+        });
+
+        result = regExp.exec(text);
+    }
+
+    return { text, entities: [...entities, ...e].sort(compareEntities) };
+}
+
+export function getMentionHashtagEntities(text, entities) {
+    let e = [];
+    const regExp = mentionHashtagRegExp;
+    let result = regExp.exec(text);
+    while (result) {
+        let { index: offset } = result;
+        let i = 1;
+
+        let ch = text[offset];
+        if (ch !== '#' && ch !== '@') {
+            offset++;
+            i++;
+            ch = text[offset];
+        }
+
+        const length = result[0].length - i + 1;
+
+        if (ch === '@') {
+            e.push({
+                '@type': 'textEntity',
+                type: { '@type': 'textEntityTypeMention' },
+                length,
+                offset
+            });
+        } else if (ch === '#') {
+            e.push({
+                '@type': 'textEntity',
+                type: { '@type': 'textEntityTypeHashtag' },
+                length,
+                offset
+            });
+        }
+
+        result = regExp.exec(text);
+    }
+
+    return { text, entities: [...entities, ...e].sort(compareEntities) };
+}
+
+const twitterInstagramEntities = new Map();
+const mentionHashtagRegExp = /(^|\s|\()@[a-zA-Z\d_.]{1,32}|(^|\s|\()#[\w]+/g;
+
+// based on https://github.com/DrKLO/Telegram/blob/5a2a813dc029ba1b9a31b514a78eb85fced0183f/TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java#L3191
+export function getTwitterInstagramEntities(patternType, text, entities) {
+    const key = `${patternType}_${text}`;
+
+    let e = [];
+    if (!twitterInstagramEntities.has(key)) {
+        let result = mentionHashtagRegExp.exec(text);
+        while (result) {
+            let { index: offset } = result;
+            let i = 1;
+
+            let ch = text[offset];
+            if (ch !== '@' && ch !== '#') {
+                offset++;
+                i++;
+                ch = text[offset];
+            }
+
+            const length = result[0].length - i + 1;
+            const foundText = result[0].substr(i);
+            let url = null;
+
+            // instagram
+            if (patternType === 1) {
+                if (ch === '@') {
+                    url = 'https://instagram.com/' + foundText;
+                } else if (ch === '#') {
+                    url = 'https://instagram.com/explore/tags/' + foundText;
+                }
+                // twitter
+            } else if (patternType === 2) {
+                if (ch === '@') {
+                    url = 'https://twitter.com/' + foundText;
+                } else if (ch === '#') {
+                    url = 'https://twitter.com/hashtag/' + foundText;
+                }
+            }
+
+            if (url) {
+                e.push({
+                    '@type': 'textEntity',
+                    type: { '@type': 'textEntityTypeTextUrl', url },
+                    length,
+                    offset
+                });
+            }
+
+            result = mentionHashtagRegExp.exec(text);
+        }
+
+        twitterInstagramEntities.set(key, e);
+    } else {
+        e = twitterInstagramEntities.get(key);
+    }
+
+    return { text, entities: [...entities, ...e].sort(compareEntities) };
+}
+
+export function getHTMLEntities(text, entities) {
     const result = new DOMParser().parseFromString(text, 'text/html');
+
     let offset = 0;
     let length = 0;
+
     let finalText = '';
     result.body.childNodes.forEach(node => {
         const { textContent, nodeName } = node;
@@ -1896,9 +2209,21 @@ export function getEntities(text) {
         }
     });
     text = finalText;
-    console.log(`[ge] HTML nodes text=${text}`, entities);
 
-    // 1 looking for ``` and ` in order to find mono and pre entities
+    return text;
+}
+
+export function getMonoPreEntities(text, entities) {
+    const mono = '`';
+    const pre = '```';
+    let isPre = false;
+
+    let index = -1;     // first index of end tag
+    let lastIndex = 0;  // first index after end tag
+    let start = -1;     // first index of start tag
+
+    let offset = 0, length = 0;
+
     while ((index = text.indexOf(isPre ? pre : mono, lastIndex)) !== -1) {
         if (start === -1) {
             // find start tag
@@ -1919,41 +2244,15 @@ export function getEntities(text) {
             if (isPre) {
                 // add pre tag
 
-                // clean space and new line symbol before start tag
-                const firstChar = start > 0 ? text[start - 1] : 0;
-                let replacedFirst = firstChar === ' ' || firstChar === '\xA0' || firstChar === '\n';
-                let startText = text.substring(0, start - (replacedFirst ? 1 : 0));
+                let textBefore = text.substring(0, start);
+                let textContent = text.substring(start + 3, index);
+                let textAfter = text.substring(index + 3, text.length);
 
-                // remove first line break in pre content
-                let replacedContentNewLine = false;
-                let contentText = text.substring(start + 3, index);
-                if (contentText.length > 0 && contentText[0] === '\n') {
-                    contentText = contentText.substring(1);
-                    replacedContentNewLine = true;
-                }
+                if (textContent.length > 0) {
+                    offset = start;
+                    length = index - start - 3;
 
-                // clean space and new line symbol after end tag
-                const lastChar = index + 3 < text.length ? text[index + 3] : 0;
-                const replacedLast = lastChar === ' ' || lastChar === '\xA0' || lastChar === '\n';
-                let endText = text.substring(index + 3 + (replacedLast ? 1 : 0), text.length);
-
-                // add new line before pre
-                if (startText.length > 0) {
-                    startText += '\n';
-                } else {
-                    replacedFirst = true;
-                }
-
-                // add new line after pre
-                if (endText.length > 0) {
-                    endText = '\n' + endText;
-                }
-
-                if (contentText.length > 0) {
-                    offset = start + (replacedFirst ? 0 : 1);
-                    length = index - start - 3 - (replacedContentNewLine ? 1 : 0) + (replacedFirst ? 0 : 1);
-
-                    text = startText + contentText + endText;
+                    text = textBefore + textContent + textAfter;
 
                     const entity = {
                         '@type': 'textEntity',
@@ -1967,6 +2266,61 @@ export function getEntities(text) {
                     removeOffsetAfter(offset + length, 6, entities);
                     entities.push(entity);
                     lastIndex -= 6;
+
+                    // clean text before
+                    if (textBefore.length > 0) {
+                        const lastChar = textBefore[textBefore.length - 1];
+                        if (lastChar !== '\n') {
+                            if (lastChar === ' ' || lastChar === '\xA0') {
+                                textBefore = textBefore.substr(0, textBefore.length - 1) + '\n';
+                                text = textBefore + textContent + textAfter;
+                            } else {
+                                textBefore += '\n';
+                                text = textBefore + textContent + textAfter;
+                                addOffsetAfter(offset - 1, 1, entities);
+                                lastIndex += 1;
+                            }
+                        }
+                    }
+
+                    // clean text after
+                    if (textAfter.length > 0) {
+                        const firstChar = textAfter[0];
+                        if (firstChar !== '\n') {
+                            if (firstChar === ' ' || firstChar === '\xA0') {
+                                textAfter = '\n' + textAfter.substr(1);
+                                text = textBefore + textContent + textAfter;
+                            } else {
+                                textAfter = '\n' + textAfter;
+                                text = textBefore + textContent + textAfter;
+                                addOffsetAfter(offset + length - 1, 1, entities);
+                                lastIndex += 1;
+                            }
+                        }
+                    }
+
+                    // clean text content
+                    if (textContent.length > 2) {
+                        if (textContent[0] === '\n') {
+                            textContent = textContent.substring(1);
+                            text = textBefore + textContent + textAfter;
+                            entity.length -= 1;
+                            entity.textContent = textContent;
+                            removeOffsetAfter(entity.offset + entity.length - 1, 1, entities);
+                            lastIndex -= 1;
+                        }
+                    }
+
+                    if (textContent.length > 2) {
+                        if (textContent[textContent.length - 1] === '\n') {
+                            textContent = textContent.substring(0, textContent.length - 1);
+                            text = textBefore + textContent + textAfter;
+                            entity.length -= 1;
+                            entity.textContent = textContent;
+                            removeOffsetAfter(entity.offset + entity.length - 1, 1, entities);
+                            lastIndex -= 1;
+                        }
+                    }
                 }
             } else {
                 // add code tag
@@ -2019,8 +2373,20 @@ export function getEntities(text) {
         }
     }
 
-    console.log(`[ge] pre and code text=${text}`, entities);
-    // 2 looking for bold, italic entities
+    return text;
+}
+
+export function getBoldItalicEntities(text, entities) {
+    const bold = '**';
+    const italic = '__';
+
+
+    let index = -1;     // first index of end tag
+    let lastIndex = 0;  // first index after end tag
+    let start = -1;     // first index of start tag
+
+    let offset = 0, length = 0;
+
     for (let c = 0; c < 2; c++) {
         lastIndex = 0;
         start = -1;
@@ -2073,9 +2439,8 @@ export function getEntities(text) {
             }
         }
     }
-    console.log(`[ge] result text=${text}`, entities);
 
-    return { text, entities };
+    return text;
 }
 
 export function canMessageBeEdited(chatId, messageId) {
@@ -2105,6 +2470,108 @@ export function isTextMessage(chatId, messageId) {
     return content && content['@type'] === 'messageText';
 }
 
+export function isMessagePinned(chatId, messageId) {
+    const chat = ChatStore.get(chatId);
+    if (!chat) return false;
+
+    return chat.pinned_message_id === messageId;
+}
+
+export function canMessageBeUnvoted(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return false;
+
+    const { content } = message;
+    if (!content) return;
+    if (content['@type'] !== 'messagePoll') return;
+
+    const { poll } = content;
+    if (!poll) return false;
+
+    const { type, is_closed, options } = poll;
+    if (!type) return false;
+    if (type['@type'] !== 'pollTypeRegular') return false;
+    if (is_closed) return false;
+
+    return options.some(x => x.is_chosen || x.is_being_chosen);
+}
+
+export function canMessageBeClosed(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return false;
+
+    const { content, can_be_edited } = message;
+    if (!content) return;
+    if (content['@type'] !== 'messagePoll') return;
+
+    return can_be_edited;
+}
+
+export function canMessageBeForwarded(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+
+    return message && message.can_be_forwarded;
+}
+
+export function canMessageBeDeleted(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+
+    return message && (message.can_be_deleted_only_for_self || message.can_be_deleted_for_all_users);
+}
+
+export function getMessageStyle(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return null;
+
+    const { content } = message;
+    if (!content) return null;
+
+    switch (content['@type']) {
+        case 'messageAnimation': {
+            const { animation } = content;
+            if (!animation) return null;
+
+            const { width, height, thumbnail } = animation;
+
+            const size = { width, height } || thumbnail;
+            if (!size) return null;
+
+            const fitSize = getFitSize(size, PHOTO_DISPLAY_SIZE, false);
+            if (!fitSize) return null;
+
+            return { width: fitSize.width };
+        }
+        case 'messagePhoto': {
+            const { photo } = content;
+            if (!photo) return null;
+
+            const size = getSize(photo.sizes, PHOTO_SIZE);
+            if (!size) return null;
+
+            const fitSize = getFitSize(size, PHOTO_DISPLAY_SIZE, false);
+            if (!fitSize) return null;
+
+            return { width: fitSize.width };
+        }
+        case 'messageVideo': {
+            const { video } = content;
+            if (!video) return null;
+
+            const { thumbnail, width, height } = video;
+
+            const size = { width, height } || thumbnail;
+            if (!size) return null;
+
+            const fitSize = getFitSize(size, PHOTO_DISPLAY_SIZE);
+            if (!fitSize) return null;
+
+            return { width: fitSize.width };
+        }
+    }
+
+    return null;
+}
+
 export {
     getAuthor,
     getTitle,
@@ -2114,7 +2581,6 @@ export {
     getContent,
     getDate,
     getDateHint,
-    getMedia,
     isForwardOriginHidden,
     getForwardTitle,
     getUnread,

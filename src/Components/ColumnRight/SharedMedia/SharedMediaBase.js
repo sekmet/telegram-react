@@ -6,7 +6,6 @@
  */
 
 import React from 'react';
-import PropTypes from 'prop-types';
 import classNames from 'classnames';
 import SharedDocument from '../../Tile/SharedMedia/SharedDocument';
 import SharedMediaHeader from './SharedMediaHeader';
@@ -20,13 +19,12 @@ import TdLibController from '../../../Controllers/TdLibController';
 import './SharedMediaBase.css';
 
 class SharedMediaBase extends React.Component {
-    static getStyles(theme) {
-        return {
-            sharedMediaList: {},
-            sharedMediaSearchList: {
-                background: theme.palette.type === 'dark' ? theme.palette.background.default : '#FFFFFF'
-            }
-        };
+    getListClassName() {
+        return null;
+    }
+
+    getSearchListClassName() {
+        return null;
     }
 
     constructor(props) {
@@ -88,9 +86,9 @@ class SharedMediaBase extends React.Component {
     }
 
     componentWillUnmount() {
-        MessageStore.removeListener('updateDeleteMessages', this.onUpdateDeleteMessages);
-        MessageStore.removeListener('updateMessageContent', this.onUpdateMessageContent);
-        MessageStore.removeListener('updateNewMessage', this.onUpdateNewMessage);
+        MessageStore.off('updateDeleteMessages', this.onUpdateDeleteMessages);
+        MessageStore.off('updateMessageContent', this.onUpdateMessageContent);
+        MessageStore.off('updateNewMessage', this.onUpdateNewMessage);
     }
 
     onUpdateMessageContent = update => {
@@ -456,14 +454,12 @@ class SharedMediaBase extends React.Component {
     };
 
     render() {
-        const { classes, minHeight, onClose, popup } = this.props;
+        const { minHeight, onClose, popup } = this.props;
         const { items, migratedItems, searchItems, searchMigratedItems } = this.state;
         const { searchParams } = this;
 
         const messages = items.concat(migratedItems).map(x => this.getItemTemplate(x));
         const searchMessages = searchItems.concat(searchMigratedItems).map(x => this.getItemTemplate(x));
-
-        console.log('SharedMediaBase.render', items, messages);
 
         return (
             <>
@@ -476,7 +472,7 @@ class SharedMediaBase extends React.Component {
                 />
                 <div
                     ref={this.listRef}
-                    className={classNames('shared-media-list', classes.sharedMediaList)}
+                    className={classNames('shared-media-list', this.getListClassName())}
                     onScroll={this.handleScroll}
                     style={{ minHeight: popup ? minHeight : null }}>
                     {messages}
@@ -484,7 +480,7 @@ class SharedMediaBase extends React.Component {
                 {Boolean(searchParams) && (
                     <div
                         ref={this.searchListRef}
-                        className={classNames('shared-media-search-list', classes.sharedMediaSearchList)}
+                        className={classNames('shared-media-search-list', this.getSearchListClassName())}
                         onScroll={this.handleSearchScroll}>
                         {searchMessages}
                     </div>

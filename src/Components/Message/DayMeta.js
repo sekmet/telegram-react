@@ -7,18 +7,9 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
 import { withTranslation } from 'react-i18next';
 import LocalizationStore from '../../Stores/LocalizationStore';
 import './DayMeta.css';
-
-const styles = theme => ({
-    dayMeta: {
-        color: theme.palette.text.secondary
-    }
-});
 
 class DayMeta extends React.Component {
     componentDidMount() {
@@ -26,7 +17,7 @@ class DayMeta extends React.Component {
     }
 
     componentWillUnmount() {
-        LocalizationStore.removeListener('clientUpdateLanguageChange', this.onClientUpdateLanguage);
+        LocalizationStore.off('clientUpdateLanguageChange', this.onClientUpdateLanguage);
     }
 
     onClientUpdateLanguage = () => {
@@ -34,11 +25,25 @@ class DayMeta extends React.Component {
     };
 
     render() {
-        const { classes, date, i18n } = this.props;
+        const { date, i18n } = this.props;
+
+        const showYear = new Date(date * 1000) < new Date().setMonth(new Date().getMonth() - 3);
+        const options = showYear
+            ? {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric'
+              }
+            : {
+                  day: 'numeric',
+                  month: 'long'
+              };
 
         return (
-            <div className={classNames('day-meta', classes.dayMeta)}>
-                {new Date(date * 1000).toLocaleDateString([i18n.language], { day: 'numeric', month: 'long' })}
+            <div className='day-meta'>
+                <div className='day-meta-wrapper'>
+                    <div>{new Date(date * 1000).toLocaleDateString([i18n.language], options)}</div>
+                </div>
             </div>
         );
     }
@@ -48,9 +53,4 @@ DayMeta.propTypes = {
     date: PropTypes.number.isRequired
 };
 
-const enhance = compose(
-    withStyles(styles, { withTheme: true }),
-    withTranslation()
-);
-
-export default enhance(DayMeta);
+export default withTranslation()(DayMeta);

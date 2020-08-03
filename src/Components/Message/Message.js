@@ -7,15 +7,15 @@
 
 import React, { Component } from 'react';
 import classNames from 'classnames';
-import { compose } from 'recompose';
+import { compose } from '../../Utils/HOC';
 import { withTranslation } from 'react-i18next';
-import withStyles from '@material-ui/core/styles/withStyles';
 import CheckMarkIcon from '@material-ui/icons/Check';
+import DayMeta from './DayMeta';
 import Reply from './Reply';
 import Forward from './Forward';
 import Meta from './Meta';
-import MessageStatus from './MessageStatus';
 import MessageAuthor from './MessageAuthor';
+import MessageMenu from './MessageMenu';
 import UserTile from '../Tile/UserTile';
 import ChatTile from '../Tile/ChatTile';
 import UnreadSeparator from './UnreadSeparator';
@@ -23,113 +23,101 @@ import WebPage from './Media/WebPage';
 import {
     getEmojiMatches,
     getText,
-    getMedia,
-    getUnread,
     getWebPage,
     openMedia,
-    showMessageForward
+    showMessageForward,
+    isMetaBubble,
+    canMessageBeForwarded,
+    getMessageStyle
 } from '../../Utils/Message';
-import { canSendMessages } from '../../Utils/Chat';
-import { openUser, openChat, selectMessage, openReply } from '../../Actions/Client';
+import { getMedia } from '../../Utils/Media';
+import { canSendMessages, isChannelChat, isPrivateChat } from '../../Utils/Chat';
+import {
+    openUser,
+    openChat,
+    selectMessage,
+    openReply, replyMessage, forwardMessages
+} from '../../Actions/Client';
+import { withRestoreRef, withSaveRef } from '../../Utils/HOC';
 import MessageStore from '../../Stores/MessageStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './Message.css';
-
-const styles = theme => ({
-    message: {
-        backgroundColor: 'transparent'
-    },
-    messageAuthorColor: {
-        color: theme.palette.primary.main
-    },
-    messageSelected: {
-        backgroundColor: theme.palette.primary.main + '22'
-    },
-    messageSelectTick: {
-        background: theme.palette.primary.main,
-        color: 'white'
-    },
-    '@keyframes highlighted': {
-        from: { backgroundColor: theme.palette.primary.main + '22' },
-        to: { backgroundColor: 'transparent' }
-    },
-    messageHighlighted: {
-        animation: 'highlighted 4s ease-out'
-    }
-});
 
 class Message extends Component {
     constructor(props) {
         super(props);
 
         const { chatId, messageId } = this.props;
-        if (process.env.NODE_ENV !== 'production') {
-            this.state = {
-                message: MessageStore.get(chatId, messageId),
-                emojiMatches: getEmojiMatches(chatId, messageId),
-                selected: false,
-                highlighted: false
-            };
-        } else {
-            this.state = {
-                emojiMatches: getEmojiMatches(chatId, messageId),
-                selected: false,
-                highlighted: false
-            };
-        }
+        this.state = {
+            message: MessageStore.get(chatId, messageId),
+            emojiMatches: getEmojiMatches(chatId, messageId),
+            selected: false,
+            highlighted: false,
+            shook: false,
+
+            contextMenu: false,
+            copyLink: null,
+            left: 0,
+            top: 0
+        };
     }
 
     shouldComponentUpdate(nextProps, nextState) {
-        const { theme, chatId, messageId, sendingState, showUnreadSeparator, showTitle } = this.props;
-        const { contextMenu, selected, highlighted, emojiMatches } = this.state;
-
-        if (nextProps.theme !== theme) {
-            console.log('Message.shouldComponentUpdate true');
-            return true;
-        }
+        const { chatId, messageId, sendingState, showUnreadSeparator, showTail, showTitle } = this.props;
+        const { contextMenu, selected, highlighted, shook, emojiMatches } = this.state;
 
         if (nextProps.chatId !== chatId) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true chatId');
             return true;
         }
 
         if (nextProps.messageId !== messageId) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true messageId');
             return true;
         }
 
         if (nextProps.sendingState !== sendingState) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true sendingState');
             return true;
         }
 
         if (nextProps.showUnreadSeparator !== showUnreadSeparator) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true showUnreadSeparator');
+            return true;
+        }
+
+        if (nextProps.showTail !== showTail) {
+            // console.log('Message.shouldComponentUpdate true showTail');
             return true;
         }
 
         if (nextProps.showTitle !== showTitle) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true showTitle');
             return true;
         }
 
         if (nextState.contextMenu !== contextMenu) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true contextMenu');
             return true;
         }
 
         if (nextState.selected !== selected) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true selected');
             return true;
         }
 
         if (nextState.highlighted !== highlighted) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true highlighted');
+            return true;
+        }
+
+        if (nextState.shook !== shook) {
+            // console.log('Message.shouldComponentUpdate true shook');
             return true;
         }
 
         if (nextState.emojiMatches !== emojiMatches) {
-            console.log('Message.shouldComponentUpdate true');
+            // console.log('Message.shouldComponentUpdate true emojiMatches');
             return true;
         }
 
@@ -140,6 +128,7 @@ class Message extends Component {
     componentDidMount() {
         MessageStore.on('clientUpdateMessageHighlighted', this.onClientUpdateMessageHighlighted);
         MessageStore.on('clientUpdateMessageSelected', this.onClientUpdateMessageSelected);
+        MessageStore.on('clientUpdateMessageShake', this.onClientUpdateMessageShake);
         MessageStore.on('clientUpdateClearSelection', this.onClientUpdateClearSelection);
         MessageStore.on('updateMessageContent', this.onUpdateMessageContent);
         MessageStore.on('updateMessageEdited', this.onUpdateMessageEdited);
@@ -147,18 +136,36 @@ class Message extends Component {
     }
 
     componentWillUnmount() {
-        MessageStore.removeListener('clientUpdateMessageHighlighted', this.onClientUpdateMessageHighlighted);
-        MessageStore.removeListener('clientUpdateMessageSelected', this.onClientUpdateMessageSelected);
-        MessageStore.removeListener('clientUpdateClearSelection', this.onClientUpdateClearSelection);
-        MessageStore.removeListener('updateMessageContent', this.onUpdateMessageContent);
-        MessageStore.removeListener('updateMessageEdited', this.onUpdateMessageEdited);
-        MessageStore.removeListener('updateMessageViews', this.onUpdateMessageViews);
+        MessageStore.off('clientUpdateMessageHighlighted', this.onClientUpdateMessageHighlighted);
+        MessageStore.off('clientUpdateMessageSelected', this.onClientUpdateMessageSelected);
+        MessageStore.off('clientUpdateMessageShake', this.onClientUpdateMessageShake);
+        MessageStore.off('clientUpdateClearSelection', this.onClientUpdateClearSelection);
+        MessageStore.off('updateMessageContent', this.onUpdateMessageContent);
+        MessageStore.off('updateMessageEdited', this.onUpdateMessageEdited);
+        MessageStore.off('updateMessageViews', this.onUpdateMessageViews);
     }
 
     onClientUpdateClearSelection = update => {
         if (!this.state.selected) return;
 
         this.setState({ selected: false });
+    };
+
+    onClientUpdateMessageShake = update => {
+        const { chatId, messageId } = this.props;
+        const { shook } = this.state;
+
+        if (chatId === update.chatId && messageId === update.messageId) {
+            if (shook) {
+                this.setState({ shook: false }, () => {
+                    setTimeout(() => {
+                        this.setState({ shook: true });
+                    }, 0);
+                });
+            } else {
+                this.setState({ shook: true });
+            }
+        }
     };
 
     onClientUpdateMessageHighlighted = update => {
@@ -251,27 +258,16 @@ class Message extends Component {
 
         const { chatId, messageId } = this.props;
 
-        const message = MessageStore.get(chatId, messageId);
-
         const canBeReplied = canSendMessages(chatId);
         if (canBeReplied) {
-            TdLibController.clientUpdate({
-                '@type': 'clientUpdateReply',
-                chatId: chatId,
-                messageId: messageId
-            });
+            replyMessage(chatId, messageId);
+
             return;
         }
 
-        const canBeForwarded = message && message.can_be_forwarded;
+        const canBeForwarded = canMessageBeForwarded(chatId, messageId);
         if (canBeForwarded) {
-            TdLibController.clientUpdate({
-                '@type': 'clientUpdateForward',
-                info: {
-                    chatId: chatId,
-                    messageIds: [messageId]
-                }
-            });
+            forwardMessages(chatId, [messageId]);
         }
     };
 
@@ -307,93 +303,198 @@ class Message extends Component {
         openReply(chatId, messageId);
     };
 
+    handleOpenContextMenu = async event => {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        const { contextMenu } = this.state;
+
+        if (contextMenu) {
+            this.setState({ contextMenu: false });
+        } else {
+            if (MessageStore.selectedItems.size > 1) {
+                return;
+            }
+
+            const left = event.clientX;
+            const top = event.clientY;
+            const copyLink =
+                event.target && event.target.tagName === 'A' && event.target.href ? event.target.href : null;
+
+            this.setState({
+                contextMenu: true,
+                copyLink,
+                left,
+                top
+            });
+        }
+    };
+
+    handleCloseContextMenu = event => {
+        if (event) {
+            event.stopPropagation();
+        }
+
+        this.setState({ contextMenu: false });
+    };
+
     render() {
-        // console.log('[m] render', this.props.messageId);
-        const { t, classes, chatId, messageId, showUnreadSeparator, showTitle } = this.props;
-        const { emojiMatches, selected, highlighted } = this.state;
+        const { t, chatId, messageId, showUnreadSeparator, showTail, showTitle, showDate } = this.props;
+        const {
+            emojiMatches,
+            selected,
+            highlighted,
+            shook,
+            copyLink,
+            contextMenu,
+            left,
+            top
+        } = this.state;
+
+        // console.log('Message.render', messageId);
 
         const message = MessageStore.get(chatId, messageId);
         if (!message) return <div>[empty message]</div>;
 
-        const { sending_state, views, date, edit_date, reply_to_message_id, forward_info, sender_user_id } = message;
+        const { is_outgoing, views, date, edit_date, reply_to_message_id, forward_info, sender_user_id } = message;
 
-        const text = getText(message);
+        const isOutgoing = is_outgoing && !isChannelChat(chatId);
+        const inlineMeta = (
+            <Meta
+                className='meta-hidden'
+                key={`${chatId}_${messageId}_meta`}
+                chatId={chatId}
+                messageId={messageId}
+                date={date}
+                editDate={edit_date}
+                views={views}
+            />
+        );
+        const text = getText(message, inlineMeta, t);
+        const hasCaption = text !== null && text.length > 0;
+        const showForward = showMessageForward(chatId, messageId);
+        const showReply = Boolean(reply_to_message_id);
+        const suppressTitle = isPrivateChat(chatId);
+        const hasTitle = (!suppressTitle && showTitle) || showForward || showReply;
         const webPage = getWebPage(message);
-        const media = getMedia(message, this.openMedia);
-        this.unread = getUnread(message);
+        const media = getMedia(message, this.openMedia, hasTitle, hasCaption, inlineMeta);
 
         let tile = null;
-        if (showTitle) {
+        if (showTail) {
             tile = sender_user_id ? (
-                <UserTile userId={sender_user_id} onSelect={this.handleSelectUser} />
+                <UserTile small userId={sender_user_id} onSelect={this.handleSelectUser} />
             ) : (
-                <ChatTile chatId={chatId} onSelect={this.handleSelectChat} />
+                <ChatTile small chatId={chatId} onSelect={this.handleSelectChat} />
             );
         }
 
-        const showForward = showMessageForward(chatId, messageId);
-
-        const messageClassName = classNames('message', classes.message, {
-            'message-selected': selected,
-            [classes.messageSelected]: selected,
-            [classes.messageHighlighted]: highlighted && !selected,
-            'message-short': !showTitle
-        });
-
-        const meta = <Meta date={date} editDate={edit_date} views={views} onDateClick={this.handleDateClick} />;
+        const style = getMessageStyle(chatId, messageId);
+        const withBubble =
+            message.content['@type'] !== 'messageSticker' && message.content['@type'] !== 'messageVideoNote';
 
         return (
-            <div
-                className={messageClassName}
-                onMouseOver={this.handleMouseOver}
-                onMouseOut={this.handleMouseOut}
-                onMouseDown={this.handleMouseDown}
-                onClick={this.handleSelection}
-                onAnimationEnd={this.handleAnimationEnd}>
-                {showUnreadSeparator && <UnreadSeparator />}
-                <div className='message-wrapper'>
-                    <div className='message-left-padding'>
-                        {/*<div className='message-left-padding-wrapper'>*/}
-                        {/**/}
-                        {/*</div>*/}
-                        <CheckMarkIcon className={classNames('message-select-tick', classes.messageSelectTick)} />
-                        {this.unread && (
-                            <MessageStatus chatId={chatId} messageId={messageId} sendingState={sending_state} />
-                        )}
-                    </div>
-                    {tile}
-                    <div className='message-content'>
-                        <div className='message-title'>
-                            {showTitle && !showForward && (
-                                <MessageAuthor chatId={chatId} openChat userId={sender_user_id} openUser />
-                            )}
-                            {showForward && <Forward forwardInfo={forward_info} />}
-                            {showTitle && meta}
+            <div>
+                {showDate && <DayMeta date={date} />}
+                <div
+                    className={classNames('message', {
+                        'message-short': !tile,
+                        'message-out': isOutgoing,
+                        'message-selected': selected,
+                        'message-highlighted': highlighted && !selected,
+                        'message-top': showTitle && !showTail,
+                        'message-bottom': !showTitle && showTail,
+                        'message-middle': !showTitle && !showTail,
+                        'message-bubble-hidden': !withBubble
+                    })}
+                    onMouseOver={this.handleMouseOver}
+                    onMouseOut={this.handleMouseOut}
+                    onMouseDown={this.handleMouseDown}
+                    onClick={this.handleSelection}
+                    onAnimationEnd={this.handleAnimationEnd}
+                    onContextMenu={this.handleOpenContextMenu}>
+                    {showUnreadSeparator && <UnreadSeparator />}
+                    <div className='message-body'>
+                        <div className='message-padding'>
+                            <CheckMarkIcon className='message-select-tick' />
                         </div>
-                        {Boolean(reply_to_message_id) && (
-                            <Reply chatId={chatId} messageId={reply_to_message_id} onClick={this.handleReplyClick} />
-                        )}
-                        {media}
-                        <div
-                            className={classNames('message-text', {
-                                'message-text-1emoji': emojiMatches === 1,
-                                'message-text-2emoji': emojiMatches === 2,
-                                'message-text-3emoji': emojiMatches === 3
-                            })}>
-                            {text}
+                        <div className={classNames('message-wrapper', { 'shook': shook })}>
+                            {tile}
+                            <div
+                                className={classNames('message-content', {
+                                    'message-bubble': withBubble,
+                                    'message-bubble-out': withBubble && isOutgoing
+                                })}
+                                style={style}>
+                                {withBubble && ((showTitle && !suppressTitle) || showForward) && (
+                                    <div className='message-title'>
+                                        {showTitle && !showForward && (
+                                            <MessageAuthor chatId={chatId} openChat userId={sender_user_id} openUser />
+                                        )}
+                                        {showForward && <Forward forwardInfo={forward_info} />}
+                                    </div>
+                                )}
+                                {showReply && (
+                                    <Reply
+                                        chatId={chatId}
+                                        messageId={reply_to_message_id}
+                                        onClick={this.handleReplyClick}
+                                    />
+                                )}
+                                {media}
+                                <div
+                                    className={classNames('message-text', {
+                                        'message-text-1emoji': emojiMatches === 1,
+                                        'message-text-2emoji': emojiMatches === 2,
+                                        'message-text-3emoji': emojiMatches === 3
+                                    })}>
+                                    {text}
+                                </div>
+                                {webPage && (
+                                    <WebPage
+                                        chatId={chatId}
+                                        messageId={messageId}
+                                        openMedia={this.openMedia}
+                                        meta={inlineMeta}
+                                    />
+                                )}
+                                {withBubble && (
+                                    <Meta
+                                        className={classNames('meta-text', {
+                                            'meta-bubble': isMetaBubble(chatId, messageId)
+                                        })}
+                                        chatId={chatId}
+                                        messageId={messageId}
+                                        date={date}
+                                        editDate={edit_date}
+                                        views={views}
+                                        onDateClick={this.handleDateClick}
+                                    />
+                                )}
+                            </div>
+                            <div className='message-tile-padding' />
                         </div>
-                        {webPage && <WebPage chatId={chatId} messageId={messageId} openMedia={this.openMedia} />}
+                        <div className='message-padding' />
                     </div>
-                    {!showTitle && meta}
                 </div>
+                <MessageMenu
+                    chatId={chatId}
+                    messageId={messageId}
+                    anchorPosition={{ top, left }}
+                    open={contextMenu}
+                    onClose={this.handleCloseContextMenu}
+                    copyLink={copyLink}
+                />
             </div>
         );
     }
 }
 
 const enhance = compose(
-    withStyles(styles, { withTheme: true }),
-    withTranslation()
+    withSaveRef(),
+    withTranslation(),
+    withRestoreRef()
 );
 
 export default enhance(Message);

@@ -5,12 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { EventEmitter } from 'events';
-import { isMessageMuted } from '../Utils/Message';
+import EventEmitter from './EventEmitter';
+import { isMessageMuted } from '../Utils/Store';
 import { APP_NAME, NOTIFICATION_AUDIO_DELAY_MS } from '../Constants';
+import AppStore from './ApplicationStore';
 import ChatStore from './ChatStore';
 import MessageStore from './MessageStore';
 import TdLibController from '../Controllers/TdLibController';
+import { isChatMember, isMeChat } from '../Utils/Chat';
 
 class NotificationStore extends EventEmitter {
     constructor() {
@@ -19,7 +21,6 @@ class NotificationStore extends EventEmitter {
         this.reset();
 
         this.addTdLibListener();
-        this.setMaxListeners(Infinity);
     }
 
     reset = () => {
@@ -40,7 +41,7 @@ class NotificationStore extends EventEmitter {
         let unreadCount = 0;
         this.newMessages.forEach(chat => {
             chat.forEach(m => {
-                if (!isMessageMuted(m)) {
+                if (!m.is_outgoing && !isMessageMuted(m)) {
                     unreadCount++;
                 }
             });
@@ -154,22 +155,34 @@ class NotificationStore extends EventEmitter {
             }
             case 'updateNewMessage': {
                 const { windowFocused } = this;
-                // console.log('[ns] updateNewMessage', windowFocused);
                 if (!windowFocused) {
                     const { message } = update;
                     const { chat_id, id } = message;
+
+                    // dismiss notifications for last visited public channels and groups
+                    if (!isChatMember(chat_id)) {
+                        break;
+                    }
+
+                    // dismiss notifications for me chat
+                    if (isMeChat(chat_id)) {
+                        break;
+                    }
 
                     const chatMap = this.newMessages.get(chat_id) || new Map();
                     chatMap.set(id, message);
                     this.newMessages.set(chat_id, chatMap);
                     this.updateTimer();
 
-                    if (!isMessageMuted(message) && this.enableSound) {
+                    if (!message.is_outgoing && !isMessageMuted(message) && this.enableSound) {
                         const now = new Date();
                         if (now > this.nextSoundAt) {
-                            // console.log('[ns] audio play');
-                            const audio = new Audio('sound_a.mp3');
-                            audio.play();
+                            try {
+                                const audio = new Audio('sound_a.mp3');
+                                audio.play();
+                            } catch {
+
+                            }
 
                             const nextSoundAt = new Date();
                             nextSoundAt.setMilliseconds(nextSoundAt.getMilliseconds() + NOTIFICATION_AUDIO_DELAY_MS);
@@ -224,13 +237,13 @@ class NotificationStore extends EventEmitter {
     };
 
     addTdLibListener = () => {
-        TdLibController.addListener('update', this.onUpdate);
-        TdLibController.addListener('clientUpdate', this.onClientUpdate);
+        TdLibController.on('update', this.onUpdate);
+        TdLibController.on('clientUpdate', this.onClientUpdate);
     };
 
     removeTdLibListener = () => {
-        TdLibController.removeListener('update', this.onUpdate);
-        TdLibController.removeListener('clientUpdate', this.onClientUpdate);
+        TdLibController.off('update', this.onUpdate);
+        TdLibController.off('clientUpdate', this.onClientUpdate);
     };
 }
 

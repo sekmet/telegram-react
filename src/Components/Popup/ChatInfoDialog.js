@@ -6,29 +6,12 @@
  */
 
 import React from 'react';
-import PropTypes from 'prop-types';
-import withStyles from '@material-ui/core/styles/withStyles';
 import Dialog from '@material-ui/core/Dialog';
 import ChatInfo from '../ColumnRight/ChatInfo';
+import { modalManager } from '../../Utils/Modal';
 import ApplicationStore from '../../Stores/ApplicationStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './ChatInfoDialog.css';
-
-const styles = theme => ({
-    chatInfoRoot: {
-        width: 336
-    },
-    containerRoot: {
-        alignItems: 'start'
-    },
-    dialogRoot: {
-        color: theme.palette.text.primary,
-        zIndex: theme.zIndex.modal
-    },
-    paperRoot: {
-        width: 336
-    }
-});
 
 class ChatInfoDialog extends React.Component {
     state = {
@@ -42,14 +25,22 @@ class ChatInfoDialog extends React.Component {
     }
 
     componentDidMount() {
-        ApplicationStore.on('clientUpdateDialogChatId', this.handleClientUpdateDialogChatId);
+        ApplicationStore.on('clientUpdateDialogChatId', this.onClientUpdateDialogChatId);
+        ApplicationStore.on('clientUpdateMediaViewerContent', this.onClientUpdateMediaViewerContent);
     }
 
     componentWillUnmount() {
-        ApplicationStore.removeListener('clientUpdateDialogChatId', this.handleClientUpdateDialogChatId);
+        ApplicationStore.off('clientUpdateDialogChatId', this.onClientUpdateDialogChatId);
+        ApplicationStore.off('clientUpdateMediaViewerContent', this.onClientUpdateMediaViewerContent);
     }
 
-    handleClientUpdateDialogChatId = update => {
+    onClientUpdateMediaViewerContent = update => {
+        if (ApplicationStore.mediaViewerContent) {
+            this.handleClose();
+        }
+    };
+
+    onClientUpdateDialogChatId = update => {
         const { chatId } = update;
 
         this.setState({ chatId });
@@ -63,17 +54,21 @@ class ChatInfoDialog extends React.Component {
     };
 
     render() {
-        const { classes } = this.props;
         const { chatId } = this.state;
         if (!chatId) return null;
 
         return (
             <Dialog
                 open
+                manager={modalManager}
                 transitionDuration={0}
                 onClose={this.handleClose}
-                classes={{ root: classes.dialogRoot, container: classes.containerRoot, paper: classes.paperRoot }}>
-                <ChatInfo className={classes.chatInfoRoot} chatId={chatId} popup />
+                classes={{
+                    root: 'chat-info-dialog-root',
+                    container: 'chat-info-dialog-container',
+                    paper: 'chat-info-dialog-paper'
+                }}>
+                <ChatInfo className='chat-info-dialog-content' chatId={chatId} popup />
             </Dialog>
         );
     }
@@ -81,4 +76,4 @@ class ChatInfoDialog extends React.Component {
 
 ChatInfoDialog.propTypes = {};
 
-export default withStyles(styles)(ChatInfoDialog);
+export default ChatInfoDialog;

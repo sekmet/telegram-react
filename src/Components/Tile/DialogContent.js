@@ -6,37 +6,27 @@
  */
 
 import React from 'react';
-import classNames from 'classnames';
-import { compose } from 'recompose';
 import { withTranslation } from 'react-i18next';
-import withStyles from '@material-ui/core/styles/withStyles';
 import {
     getChatTypingString,
     getChatDraft,
     getLastMessageSenderName,
     getLastMessageContent,
-    showChatDraft
+    showChatDraft, isPrivateChat
 } from '../../Utils/Chat';
 import ChatStore from '../../Stores/ChatStore';
+import UserStore from '../../Stores/UserStore';
 import './DialogContent.css';
-
-const styles = theme => ({
-    dialogContent: {
-        color: theme.palette.text.secondary
-    }
-});
 
 class DialogContent extends React.Component {
     shouldComponentUpdate(nextProps, nextState) {
-        if (nextProps.chatId !== this.props.chatId) {
+        const { chatId, t } = this.props;
+
+        if (nextProps.chatId !== chatId) {
             return true;
         }
 
-        if (nextProps.t !== this.props.t) {
-            return true;
-        }
-
-        if (nextProps.theme !== this.props.theme) {
+        if (nextProps.t !== t) {
             return true;
         }
 
@@ -50,15 +40,16 @@ class DialogContent extends React.Component {
         ChatStore.on('updateChatLastMessage', this.onUpdate);
         ChatStore.on('updateChatReadInbox', this.onUpdate);
         ChatStore.on('updateUserChatAction', this.onUpdate);
+        UserStore.on('updateUser', this.onUpdateUser);
     }
 
     componentWillUnmount() {
-        ChatStore.removeListener('clientUpdateFastUpdatingComplete', this.onFastUpdatingComplete);
-        ChatStore.removeListener('clientUpdateClearHistory', this.onClientUpdateClearHistory);
-        ChatStore.removeListener('updateChatDraftMessage', this.onUpdate);
-        ChatStore.removeListener('updateChatLastMessage', this.onUpdate);
-        ChatStore.removeListener('updateChatReadInbox', this.onUpdate);
-        ChatStore.removeListener('updateUserChatAction', this.onUpdate);
+        ChatStore.off('clientUpdateFastUpdatingComplete', this.onFastUpdatingComplete);
+        ChatStore.off('clientUpdateClearHistory', this.onClientUpdateClearHistory);
+        ChatStore.off('updateChatDraftMessage', this.onUpdate);
+        ChatStore.off('updateChatLastMessage', this.onUpdate);
+        ChatStore.off('updateChatReadInbox', this.onUpdate);
+        ChatStore.off('updateUserChatAction', this.onUpdate);
     }
 
     onClientUpdateClearHistory = update => {
@@ -74,6 +65,23 @@ class DialogContent extends React.Component {
         this.forceUpdate();
     };
 
+    onUpdateUser = update => {
+        const { chatId } = this.props;
+        const { user } = update;
+
+        const chat = ChatStore.get(chatId);
+        if (!chat) return;
+        if (isPrivateChat(chatId)) return;
+
+        const { last_message } = chat;
+        if (!last_message) return;
+
+        const { sender_user_id } = last_message;
+        if (sender_user_id !== user.id) return;
+
+        this.forceUpdate();
+    };
+
     onUpdate = update => {
         const { chatId } = this.props;
 
@@ -83,13 +91,12 @@ class DialogContent extends React.Component {
     };
 
     render() {
-        const { chatId, t, classes } = this.props;
+        const { chatId, t } = this.props;
 
-        if (this.clearHistory)
-            return <div className={classNames('dialog-content', classes.dialogContent)}>{'\u00A0'}</div>;
+        if (this.clearHistory) return <div className='dialog-content'>{'\u00A0'}</div>;
 
         const chat = ChatStore.get(chatId);
-        if (!chat) return <div className={classNames('dialog-content', classes.dialogContent)}>{'\u00A0'}</div>;
+        if (!chat) return <div className='dialog-content'>{'\u00A0'}</div>;
 
         let contentControl = null;
         const typingString = getChatTypingString(chatId);
@@ -113,7 +120,7 @@ class DialogContent extends React.Component {
 
         if (!contentControl) {
             const content = getLastMessageContent(chat, t) || '\u00A0';
-            const senderName = getLastMessageSenderName(chat);
+            const senderName = getLastMessageSenderName(chat, t);
             contentControl = (
                 <>
                     {senderName && <span className='dialog-content-accent'>{senderName}: </span>}
@@ -122,13 +129,8 @@ class DialogContent extends React.Component {
             );
         }
 
-        return <div className={classNames('dialog-content', classes.dialogContent)}>{contentControl}</div>;
+        return <div className='dialog-content'>{contentControl}</div>;
     }
 }
 
-const enhance = compose(
-    withTranslation(),
-    withStyles(styles, { withTheme: true })
-);
-
-export default enhance(DialogContent);
+export default withTranslation()(DialogContent);

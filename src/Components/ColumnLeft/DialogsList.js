@@ -6,20 +6,63 @@
  */
 
 import React from 'react';
-import CacheManager from '../../Workers/CacheManager';
+import PropTypes from 'prop-types';
 import Dialog from '../Tile/Dialog';
 import DialogPlaceholder from '../Tile/DialogPlaceholder';
-import { CHAT_SLICE_LIMIT, SCROLL_PRECISION } from '../../Constants';
+import VirtualizedList from '../Additional/VirtualizedList';
+import { changeChatDetailsVisibility } from '../../Actions/Chat';
 import { loadChatsContent } from '../../Utils/File';
 import { isAuthorizationReady, orderCompare } from '../../Utils/Common';
+import { scrollTop } from '../../Utils/DOM';
+import { chatListEquals, getChatOrder, hasChatList, isChatMember, isChatPinned, positionListEquals } from '../../Utils/Chat';
+import { CHAT_SLICE_LIMIT, SCROLL_CHATS_PRECISION } from '../../Constants';
 import AppStore from '../../Stores/ApplicationStore';
-import BasicGroupStore from '../../Stores/BasicGroupStore';
-import CacheStore from '../../Stores/CacheStore';
 import ChatStore from '../../Stores/ChatStore';
 import FileStore from '../../Stores/FileStore';
 import SupergroupStore from '../../Stores/SupergroupStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './DialogsList.css';
+import FilterStore from '../../Stores/FilterStore';
+import DialogsHeader from './DialogsHeader';
+import Filters from './Filters';
+
+class DialogListItem extends React.Component {
+    shouldComponentUpdate(nextProps, nextState, nextContext) {
+        const { chatId, chatList, style, hidden } = this.props;
+        if (nextProps.chatId !== chatId) {
+            // console.log('[vl] UserListItem.shouldUpdate true userId');
+            return true;
+        }
+
+        if (nextProps.chatList !== chatList) {
+            // console.log('[vl] UserListItem.shouldUpdate true userId');
+            return true;
+        }
+
+        if (nextProps.hidden !== hidden) {
+            // console.log('[vl] UserListItem.shouldUpdate true userId');
+            return true;
+        }
+
+        if (nextProps.style.top !== style.top) {
+            // console.log('[vl] UserListItem.shouldUpdate true style');
+            return true;
+        }
+
+        // console.log('[vl] UserListItem.shouldUpdate false');
+        return false;
+    }
+
+    render() {
+        const { chatId, chatList, hidden, style } = this.props;
+
+        return (
+            <div className='dialog-list-item' style={style}>
+                <Dialog chatId={chatId} chatList={chatList} hidden={hidden} />
+            </div>
+        );
+    }
+}
 
 class DialogsList extends React.Component {
     constructor(props) {
@@ -29,73 +72,136 @@ class DialogsList extends React.Component {
 
         this.listRef = React.createRef();
 
+        const { authorizationState } = AppStore;
+
         this.state = {
-            chats: [],
-            authorizationState: AppStore.getAuthorizationState(),
-            connectionState: AppStore.getConnectionState(),
+            authorizationState,
+            offset: 0,
+            chats: null,
             fistSliceLoaded: false,
-            cacheLoaded: false,
-            cacheChats: null
+            chatList: props.type === 'chatListMain' ? { '@type': 'chatListMain' } : { '@type': 'chatListArchive' }
         };
     }
 
     shouldComponentUpdate(nextProps, nextState) {
-        if (nextState.chats !== this.state.chats) {
+        const { theme, open, showArchive, archiveTitle, items, cacheItems } = this.props;
+        const { chats, offset, chatList } = this.state;
+
+        if (nextProps.theme !== theme) {
             return true;
         }
 
-        if (nextState.firstSliceLoaded !== this.state.firstSliceLoaded) {
+        if (nextProps.open !== open) {
             return true;
         }
 
-        if (nextState.cacheLoaded !== this.state.cacheLoaded) {
+        if (nextProps.items !== items) {
             return true;
         }
+
+        if (nextProps.cacheItems !== cacheItems) {
+            return true;
+        }
+
+        if (nextProps.showArchive !== showArchive) {
+            return true;
+        }
+
+        if (nextProps.archiveTitle !== archiveTitle) {
+            return true;
+        }
+
+        if (nextState.offset !== offset) {
+            return true;
+        }
+
+        if (nextState.chats !== chats) {
+            return true;
+        }
+
+        // if (nextState.chatList !== chatList) {
+        //     return true;
+        // }
 
         return false;
     }
 
     getSnapshotBeforeUpdate(prevProps, prevState) {
         const { current: list } = this.listRef;
+        if (!list) return { scrollTop: 0 };
 
         return { scrollTop: list.scrollTop };
     }
 
     componentDidUpdate(prevProps, prevState, snapshot) {
         const { current: list } = this.listRef;
+        if (!list) return;
+
         const { scrollTop } = snapshot;
 
-        list.scrollTop = scrollTop;
+        // if (prevState.offset > this.state.offset) {
+        //     list.scrollTop += ( - this.state.offset + prevState.offset) * 72;
+        // }
+        // list.scrollTop = scrollTop;
     }
 
     componentDidMount() {
         this.loadFirstSlice();
-        this.loadCache();
 
         AppStore.on('updateAuthorizationState', this.onUpdateAuthorizationState);
-        ChatStore.on('updateChatDraftMessage', this.onUpdate);
-        ChatStore.on('updateChatIsPinned', this.onUpdate);
-        ChatStore.on('updateChatLastMessage', this.onUpdate);
-        ChatStore.on('updateChatOrder', this.onUpdateChatOrder);
+
         ChatStore.on('clientUpdateFastUpdatingComplete', this.onFastUpdatingComplete);
         ChatStore.on('clientUpdateLeaveChat', this.onClientUpdateLeaveChat);
+        ChatStore.on('updateChatDraftMessage', this.onUpdateChatOrder);
+        ChatStore.on('updateChatLastMessage', this.onUpdateChatOrder);
+        ChatStore.on('updateChatPosition', this.onUpdateChatPosition);
+
+        FilterStore.on('clientUpdateChatList', this.onClientUpdateChatList);
+
+        SupergroupStore.on('updateSupegroup', this.onUpdateSupergroup);
     }
 
     componentWillUnmount() {
         AppStore.off('updateAuthorizationState', this.onUpdateAuthorizationState);
-        ChatStore.off('updateChatDraftMessage', this.onUpdate);
-        ChatStore.off('updateChatIsPinned', this.onUpdate);
-        ChatStore.off('updateChatLastMessage', this.onUpdate);
-        ChatStore.off('updateChatOrder', this.onUpdateChatOrder);
+
         ChatStore.off('clientUpdateFastUpdatingComplete', this.onFastUpdatingComplete);
         ChatStore.off('clientUpdateLeaveChat', this.onClientUpdateLeaveChat);
+        ChatStore.off('updateChatDraftMessage', this.onUpdateChatOrder);
+        ChatStore.off('updateChatLastMessage', this.onUpdateChatOrder);
+        ChatStore.off('updateChatPosition', this.onUpdateChatPosition);
+
+        FilterStore.off('clientUpdateChatList', this.onClientUpdateChatList);
+
+        SupergroupStore.off('updateSupegroup', this.onUpdateSupergroup);
     }
 
+    onClientUpdateChatList = update => {
+        const { chatList } = update;
+
+        this.setState({
+            chatList
+        }, () => {
+            this.loadFirstSlice();
+        });
+    };
+
+    onUpdateSupergroup = update => {
+        // const { supegroup, prevSupergroup } = update;
+        //
+        // if (!hasLeftSupergroup(supegroup, prevSupergroup)) {
+        //     return;
+        // }
+
+
+    };
+
     onClientUpdateLeaveChat = update => {
-        if (update.inProgress) {
-            this.hiddenChats.set(update.chatId, update.chatId);
+        const { inProgress, chatId } = update;
+
+        if (inProgress) {
+            this.hiddenChats.set(chatId, chatId);
         } else {
-            this.hiddenChats.delete(update.chatId);
+            this.hiddenChats.delete(chatId);
         }
 
         this.forceUpdate();
@@ -112,154 +218,76 @@ class DialogsList extends React.Component {
         // this.setState({ chats: [] }, () => this.onLoadNext(true));
     };
 
-    onUpdateConnectionState = update => {
-        const newConnectionState = update.state;
-        const { connectionState } = this.state;
-
-        this.setState({ connectionState: newConnectionState });
-
-        const updatingCompleted =
-            connectionState &&
-            connectionState['@type'] === 'connectionStateUpdating' &&
-            newConnectionState['@type'] !== 'connectionStateUpdating';
-        if (!updatingCompleted) return;
-
-        const hasSkippedUpdates = ChatStore.skippedUpdates.length > 0;
-        if (!hasSkippedUpdates) return;
-
-        ChatStore.skippedUpdates = [];
-        this.setState({ chats: [] }, () => this.onLoadNext(true));
-    };
-
     loadFirstSlice = async () => {
         const { authorizationState } = this.state;
-        if (isAuthorizationReady(authorizationState)) {
-            await FileStore.initDB(() => this.onLoadNext(true));
-        }
+        if (!isAuthorizationReady(authorizationState)) return;
+
+        await FileStore.initDB(() => this.onLoadNext(true));
     };
 
     saveCache = () => {
-        const chatIds = this.state.chats.slice(0, 25);
-        CacheStore.saveChats(chatIds);
+        const { onSaveCache, type } = this.props;
+        const { chatList } = this.state;
+        if (type !== 'chatListMain') return;
+        if (chatList['@type'] !== 'chatListMain') return;
+
+        if (onSaveCache) onSaveCache();
     };
 
-    loadCache = async () => {
-        const cacheChats = await CacheStore.getChats();
-        if (!cacheChats) return;
+    onUpdateChatPosition = update => {
+        const { chatList } = this.state;
+        const { position } = update;
 
-        this.setState({
-            cacheLoaded: true,
-            cacheChats
-        });
+        if (!chatListEquals(chatList, position.list)) {
+            return;
+        }
 
-        this.loadChatContents(cacheChats.map(x => x.id));
-
-        TdLibController.clientUpdate({
-            '@type': 'clientUpdateCacheLoaded'
-        });
+        this.onUpdateChatOrder(update);
     };
 
     onUpdateChatOrder = update => {
-        // NOTE: updateChatOrder is primary used to delete chats with order=0
-        // In all other cases use updateChatLastMessage
+        const { chats, chatList } = this.state;
+        if (!chats) return;
 
-        if (update.order !== '0') return;
-        const chat = ChatStore.get(update.chat_id);
+        const { loading } = this;
+        if (loading) return;
+
+        const { chat_id } = update;
+
+        const chat = ChatStore.get(chat_id);
         if (!chat) {
             return;
         }
 
-        // unselect deleted chat
-        if (update.chat_id === AppStore.getChatId()) {
-            TdLibController.setChatId(0);
-            AppStore.changeChatDetailsVisibility(false);
-        }
-
-        let chatIds = [];
-        for (let i = 0; i < this.state.chats.length; i++) {
-            let chat = ChatStore.get(this.state.chats[i]);
-            if (chat && chat.order !== '0') {
-                switch (chat.type['@type']) {
-                    case 'chatTypeBasicGroup': {
-                        const basicGroup = BasicGroupStore.get(chat.type.basic_group_id);
-                        if (basicGroup.status['@type'] !== 'chatMemberStatusLeft') {
-                            chatIds.push(chat.id);
-                        }
-                        break;
-                    }
-                    case 'chatTypePrivate': {
-                        chatIds.push(chat.id);
-                        break;
-                    }
-                    case 'chatTypeSecret': {
-                        chatIds.push(chat.id);
-                        break;
-                    }
-                    case 'chatTypeSupergroup': {
-                        const supergroup = SupergroupStore.get(chat.type.supergroup_id);
-                        if (supergroup.status['@type'] !== 'chatMemberStatusLeft') {
-                            chatIds.push(chat.id);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        this.reorderChats(chatIds);
-    };
-
-    onUpdate = update => {
-        const { chat_id, order } = update;
-        if (order === '0') return;
-        const chat = ChatStore.get(chat_id);
-        if (!chat || chat.order === '0') {
+        if (!hasChatList(chat_id, chatList)) {
             return;
         }
 
-        const { chats } = this.state;
+        const order = getChatOrder(chat_id, chatList);
+        const currentIndex = chats.findIndex(x => x === chat_id);
+        if (currentIndex === -1 && order === '0') {
+            return;
+        }
 
-        let newChatIds = [];
-        if (chats.length > 0) {
-            const existingChat = chats.find(x => x === chat_id);
-            if (!existingChat) {
-                const minChatOrder = ChatStore.get(chats[chats.length - 1]).order;
-                if (orderCompare(minChatOrder, chat.order) === 1) {
-                    return;
-                }
-                newChatIds.push(chat.id);
+        const chatIds = [];
+        for (let i = 0; i < chats.length; i++) {
+            const chat = ChatStore.get(chats[i]);
+            const chatOrder = getChatOrder(chats[i], chatList);
+            if (chat && chatOrder !== '0') {
+                chatIds.push(chat.id);
             }
         }
 
-        // get last chat.order values
-        let chatIds = [];
-        for (let i = 0; i < chats.length; i++) {
-            let chat = ChatStore.get(chats[i]);
-            if (chat && chat.order !== '0') {
-                switch (chat.type['@type']) {
-                    case 'chatTypeBasicGroup': {
-                        const basicGroup = BasicGroupStore.get(chat.type.basic_group_id);
-                        if (basicGroup.status['@type'] !== 'chatMemberStatusLeft') {
-                            chatIds.push(chat.id);
-                        }
-                        break;
-                    }
-                    case 'chatTypePrivate': {
-                        chatIds.push(chat.id);
-                        break;
-                    }
-                    case 'chatTypeSecret': {
-                        chatIds.push(chat.id);
-                        break;
-                    }
-                    case 'chatTypeSupergroup': {
-                        const supergroup = SupergroupStore.get(chat.type.supergroup_id);
-                        if (supergroup.status['@type'] !== 'chatMemberStatusLeft') {
-                            chatIds.push(chat.id);
-                        }
-                        break;
-                    }
-                }
+        const newChatIds = [];
+        if (order === '0') {
+            // unselect deleted chat
+            if (chat_id === AppStore.getChatId() && !chat.last_message) {
+                TdLibController.setChatId(0);
+                changeChatDetailsVisibility(false);
+            }
+        } else {
+            if (currentIndex === -1) {
+                newChatIds.push(chat_id);
             }
         }
 
@@ -270,12 +298,14 @@ class DialogsList extends React.Component {
     };
 
     reorderChats(chatIds, newChatIds = [], callback) {
+        const { chatList } = this.state;
+
         const orderedChatIds = chatIds.concat(newChatIds).sort((a, b) => {
-            return orderCompare(ChatStore.get(b).order, ChatStore.get(a).order);
+            return orderCompare(getChatOrder(b, chatList), getChatOrder(a, chatList));
         });
 
         if (!DialogsList.isDifferentOrder(this.state.chats, orderedChatIds)) {
-            callback();
+            if (callback) callback();
             return;
         }
 
@@ -295,48 +325,65 @@ class DialogsList extends React.Component {
     }
 
     handleScroll = () => {
-        const list = this.listRef.current;
+        // console.log('[vl] onScroll');
+        const list = this.listRef.current.getListRef().current;
+        if (!list) return;
 
-        if (list && list.scrollTop + list.offsetHeight >= list.scrollHeight - SCROLL_PRECISION) {
+        // console.log(`[vl] onScroll [scrollTop, offsetHeight, scrollHeight] = [${list.scrollTop}, ${list.offsetHeight}, ${list.scrollHeight}]`, list.scrollTop + list.offsetHeight, (list.scrollHeight - SCROLL_CHATS_PRECISION));
+        if (list.scrollTop <= SCROLL_CHATS_PRECISION) {
+            this.onLoadPrev();
+        } else if (list.scrollTop + list.offsetHeight >= list.scrollHeight - list.offsetHeight) {
+            // console.log(`[vl] onScroll onLoadNext`);
             this.onLoadNext();
         }
     };
 
-    onLoadNext = async (replace = false) => {
-        const { chats } = this.state;
+    onLoadPrev() {
+        this.setState({
+            offset: Math.max(this.state.offset - CHAT_SLICE_LIMIT, 0)
+        });
+    }
 
-        if (this.loading) return;
+    async onLoadNext(replace = false) {
+        const { type } = this.props;
+        const { offset, chats, chatList } = this.state;
+
+        if (chats && offset + 2 * CHAT_SLICE_LIMIT < chats.length) {
+            this.setState({
+                offset: offset + CHAT_SLICE_LIMIT
+            });
+            return;
+        }
+
+        if (this.loading) {
+            return;
+        }
 
         let offsetOrder = '9223372036854775807'; // 2^63 - 1
         let offsetChatId = 0;
         if (!replace && chats && chats.length > 0) {
             const chat = ChatStore.get(chats[chats.length - 1]);
             if (chat) {
-                offsetOrder = chat.order;
+                offsetOrder = getChatOrder(chat.id, chatList);
                 offsetChatId = chat.id;
             }
         }
 
-        console.log('DialogsList.onLoadNext getChats start', offsetChatId, offsetOrder);
+        if (type === 'chatListMain') console.log('[p] GETCHATS start', offsetOrder, offsetChatId);
         this.loading = true;
         const result = await TdLibController.send({
             '@type': 'getChats',
+            chat_list: chatList,
             offset_chat_id: offsetChatId,
             offset_order: offsetOrder,
             limit: CHAT_SLICE_LIMIT
         }).finally(() => {
             this.loading = false;
+            if (type === 'chatListMain') console.log('[p] GETCHATS stop');
             if (replace) {
-                TdLibController.clientUpdate({ '@type': 'clientUpdateDialogsReady' });
+                TdLibController.clientUpdate({ '@type': 'clientUpdateDialogsReady', list: chatList });
             }
         });
-        console.log('DialogsList.onLoadNext getChats stop', offsetChatId, offsetOrder);
-        // TdLibController.send({
-        //     '@type': 'getChats',
-        //     offset_chat_id: offsetChatId,
-        //     offset_order: offsetOrder,
-        //     limit: CHAT_SLICE_LIMIT + 100
-        // });
 
         if (result.chat_ids.length > 0 && result.chat_ids[0] === offsetChatId) {
             result.chat_ids.shift();
@@ -346,54 +393,122 @@ class DialogsList extends React.Component {
             this.replaceChats(result.chat_ids, () => {
                 this.loadChatContents(result.chat_ids);
                 this.saveCache();
+
+                if (result.chat_ids.length < CHAT_SLICE_LIMIT) {
+                    this.onLoadNext();
+                }
+
+                const list = this.listRef.current.getListRef().current;
+                if (!list) return;
+                list.scrollTop = 0;
             });
         } else {
-            console.log('DialogsList.onLoadNext setState start', offsetChatId, offsetOrder);
+            // console.log('DialogsList.onLoadNext setState start', offsetChatId, offsetOrder);
             this.appendChats(result.chat_ids, () => {
-                console.log('DialogsList.onLoadNext setState stop', offsetChatId, offsetOrder);
+                // console.log('DialogsList.onLoadNext setState stop', offsetChatId, offsetOrder);
                 this.loadChatContents(result.chat_ids);
             });
         }
-    };
-
-    loadChatContents(chats) {
-        const store = FileStore.getStore();
-        loadChatsContent(store, chats);
     }
 
-    appendChats(chats, callback) {
-        if (chats.length === 0) return;
+    loadChatContents(chatIds) {
+        const store = FileStore.getStore();
+        loadChatsContent(store, chatIds);
+    }
 
-        this.setState({ chats: this.state.chats.concat(chats), firstSliceLoaded: true }, callback);
+    appendChats(chatIds, callback) {
+        if (chatIds.length === 0) {
+            if (callback) callback();
+            return;
+        }
+
+        const { chats } = this.state;
+
+        const newChats = (chats || []).concat(chatIds);
+        this.setState({ chats: newChats, offset: newChats.length - 2 * CHAT_SLICE_LIMIT }, callback);
     }
 
     replaceChats(chats, callback) {
-        this.setState({ chats: chats, firstSliceLoaded: true }, callback);
+        this.setState({ chats, offset: 0 }, callback);
     }
 
     scrollToTop() {
-        const list = this.listRef.current;
-        list.scrollTop = 0;
+        const list = this.listRef.current.getListRef().current;
+
+        scrollTop(list);
     }
 
-    render() {
-        const { chats, firstSliceLoaded, cacheLoaded, cacheChats } = this.state;
+    renderItem = ({ index, style }, source) => {
+        const { chatList } = this.state;
+        const x = source[index];
 
+        return <DialogListItem key={x} chatId={x} chatList={chatList} hidden={this.hiddenChats.has(x)} style={style} />;
+
+        // return <Dialog key={x} chatId={x} hidden={this.hiddenChats.has(x)} style={style} />
+    };
+
+    render() {
+        const { open, cacheItems, showArchive, archiveTitle } = this.props;
+        const { chats, offset, chatList } = this.state;
+
+        // console.log('[dl] render', type, open, chats, cacheChats);
+        if (!open) return null;
+
+        this.source = [];
         let dialogs = null;
-        if (firstSliceLoaded) {
-            dialogs = chats.map(x => <Dialog key={x} chatId={x} hidden={this.hiddenChats.has(x)} />);
-        } else if (cacheLoaded) {
-            dialogs = cacheChats.map(x => <Dialog key={x.id} chatId={x.id} hidden={this.hiddenChats.has(x.id)} />);
+        if (chats) {
+            let lastPinnedId = 0;
+            chats.forEach(x => {
+                if (isChatPinned(x, chatList)) {
+                    lastPinnedId = x;
+                }
+            });
+            this.source = chats;
+            // dialogs = chats.slice(offset, offset + 2 * CHAT_SLICE_LIMIT).map(x => (
+            //     <Dialog key={x} chatId={x} isLastPinned={x === lastPinnedId} hidden={this.hiddenChats.has(x)} />
+            // ));
+        } else if (cacheItems) {
+            let lastPinnedId = 0;
+            cacheItems.forEach(x => {
+                if (isChatPinned(x, chatList)) {
+                    lastPinnedId = x;
+                }
+            });
+            this.source = cacheItems.map(x => x.id);
+            // dialogs = cacheItems.map(x => (
+            //     <Dialog
+            //         key={x.id}
+            //         chatId={x.id}
+            //         isLastPinned={x === lastPinnedId}
+            //         hidden={this.hiddenChats.has(x.id)}
+            //     />
+            // ));
         } else {
-            dialogs = Array.from(Array(10)).map((x, index) => <DialogPlaceholder key={index} index={index} />);
+            if (chatList['@type'] === 'chatListMain') {
+                dialogs = Array.from(Array(10)).map((x, index) => <DialogPlaceholder key={index} index={index} />);
+            }
         }
 
         return (
-            <div ref={this.listRef} className='dialogs-list' onScroll={this.handleScroll}>
-                {dialogs}
-            </div>
+            <VirtualizedList
+                ref={this.listRef}
+                className='dialogs-list'
+                source={this.source}
+                rowHeight={76}
+                overScanCount={20}
+                renderItem={x => this.renderItem(x, this.source)}
+                onScroll={this.handleScroll}
+            />
         );
     }
 }
+
+DialogsList.propTypes = {
+    type: PropTypes.oneOf(['chatListMain', 'chatListArchive']).isRequired,
+    showArchive: PropTypes.bool,
+    archiveTitle: PropTypes.string,
+    cacheItems: PropTypes.array,
+    items: PropTypes.array
+};
 
 export default DialogsList;

@@ -7,35 +7,34 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import copy from 'copy-to-clipboard';
 import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
+import { compose } from '../../Utils/HOC';
 import { withSnackbar } from 'notistack';
 import { withTranslation } from 'react-i18next';
 import AlternateEmailIcon from '@material-ui/icons/AlternateEmail';
 import GroupIcon from '@material-ui/icons/Group';
 import CallIcon from '@material-ui/icons/Call';
-import CloseIcon from '@material-ui/icons/Close';
+import CloseIcon from '../../Assets/Icons/Close';
 import Divider from '@material-ui/core/Divider';
 import ErrorOutlineIcon from '@material-ui/icons/ErrorOutline';
 import HeadsetIcon from '@material-ui/icons/Headset';
 import IconButton from '@material-ui/core/IconButton';
-import InsertDriveFileIcon from '@material-ui/icons/InsertDriveFile';
+import InsertDriveFileIcon from '../../Assets/Icons/Document2';
 import InsertLinkIcon from '@material-ui/icons/InsertLink';
 import List from '@material-ui/core/List';
 import ListItem from '@material-ui/core/ListItem';
 import ListItemIcon from '@material-ui/core/ListItemIcon';
 import ListItemText from '@material-ui/core/ListItemText';
 import MicIcon from '@material-ui/icons/Mic';
-import PhotoIcon from '@material-ui/icons/Photo';
+import PhotoIcon from '../../Assets/Icons/SharedMedia';
 import Typography from '@material-ui/core/Typography';
 import VideocamIcon from '@material-ui/icons/Videocam';
-import UserControl from '../Tile/UserControl';
-import ChatControl from '../Tile/ChatControl';
+import User from '../Tile/User';
+import Chat from '../Tile/Chat';
 import ChatDetailsHeader from './ChatDetailsHeader';
 import NotificationsListItem from './NotificationsListItem';
-import MoreListItem from './MoreListItem';
+import { copy } from '../../Utils/Text';
+import { getFormattedText, getUrlMentionHashtagEntities } from '../../Utils/Message';
 import {
     getChatUsername,
     getChatPhoneNumber,
@@ -44,12 +43,11 @@ import {
     getGroupChatMembers,
     getChatFullInfo,
     isPrivateChat,
-    getChatUserId,
-    isMeChat
+    isMeChat, isChannelChat
 } from '../../Utils/Chat';
 import { getUserStatusOrder } from '../../Utils/User';
 import { loadUsersContent, loadChatsContent } from '../../Utils/File';
-import { formatPhoneNumber } from '../../Utils/Common';
+import { formatPhoneNumber } from '../../Utils/Phone';
 import { openChat, openUser, setProfileMediaViewerContent } from '../../Actions/Client';
 import { withRestoreRef, withSaveRef } from '../../Utils/HOC';
 import { NOTIFICATION_AUTO_HIDE_DURATION_MS } from '../../Constants';
@@ -59,30 +57,12 @@ import BasicGroupStore from '../../Stores/BasicGroupStore';
 import SupergroupStore from '../../Stores/SupergroupStore';
 import OptionStore from '../../Stores/OptionStore';
 import FileStore from '../../Stores/FileStore';
-import ApplicationStore from '../../Stores/ApplicationStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './ChatDetails.css';
-
-const styles = theme => ({
-    closeIconButton: {
-        margin: '8px -2px 8px 12px'
-    },
-    nested: {
-        // paddingLeft: theme.spacing.unit * 4,
-    },
-    close: {
-        padding: theme.spacing.unit / 2
-    },
-    listItem: {
-        padding: '11px 22px'
-    }
-});
 
 class ChatDetails extends React.Component {
     constructor(props) {
         super(props);
-
-        console.log('ChatDetails.ctor', this.props.counters);
 
         this.chatDetailsListRef = React.createRef();
 
@@ -160,7 +140,6 @@ class ChatDetails extends React.Component {
     }
 
     componentDidMount() {
-        console.log('ChatDetails.componentDidMount');
         this.loadContent();
 
         UserStore.on('updateUserStatus', this.onUpdateUserStatus);
@@ -170,10 +149,10 @@ class ChatDetails extends React.Component {
     }
 
     componentWillUnmount() {
-        UserStore.removeListener('updateUserStatus', this.onUpdateUserStatus);
-        UserStore.removeListener('updateUserFullInfo', this.onUpdateUserFullInfo);
-        BasicGroupStore.removeListener('updateBasicGroupFullInfo', this.onUpdateBasicGroupFullInfo);
-        SupergroupStore.removeListener('updateSupergroupFullInfo', this.onUpdateSupergroupFullInfo);
+        UserStore.off('updateUserStatus', this.onUpdateUserStatus);
+        UserStore.off('updateUserFullInfo', this.onUpdateUserFullInfo);
+        BasicGroupStore.off('updateBasicGroupFullInfo', this.onUpdateBasicGroupFullInfo);
+        SupergroupStore.off('updateSupergroupFullInfo', this.onUpdateSupergroupFullInfo);
     }
 
     onUpdateBasicGroupFullInfo = update => {
@@ -249,37 +228,28 @@ class ChatDetails extends React.Component {
 
         copy(usernameLink + username);
 
-        const key = `${chatId}_copy_username`;
-        const message = t('TextCopied');
-        const action = null;
-
-        this.handleScheduledAction(key, message, action);
+        this.handleScheduledAction(t('LinkCopied'));
     };
 
-    handleScheduledAction = (key, message, action) => {
-        if (!key) return;
+    handleScheduledAction = message => {
+        const { enqueueSnackbar, closeSnackbar } = this.props;
 
-        const { enqueueSnackbar, classes } = this.props;
-        if (!enqueueSnackbar) return;
-
-        const TRANSITION_DELAY = 150;
-        if (
-            ApplicationStore.addScheduledAction(key, NOTIFICATION_AUTO_HIDE_DURATION_MS + 2 * TRANSITION_DELAY, action)
-        ) {
-            enqueueSnackbar(message, {
-                autoHideDuration: NOTIFICATION_AUTO_HIDE_DURATION_MS,
-                action: [
-                    <IconButton
-                        key='close'
-                        aria-label='Close'
-                        color='inherit'
-                        className={classes.close}
-                        onClick={() => ApplicationStore.removeScheduledAction(key)}>
-                        <CloseIcon />
-                    </IconButton>
-                ]
-            });
-        }
+        const snackKey = enqueueSnackbar(message, {
+            autoHideDuration: NOTIFICATION_AUTO_HIDE_DURATION_MS,
+            preventDuplicate: true,
+            action: [
+                <IconButton
+                    key='close'
+                    aria-label='Close'
+                    color='inherit'
+                    className='notification-close-button'
+                    onClick={() => {
+                        closeSnackbar(snackKey);
+                    }}>
+                    <CloseIcon />
+                </IconButton>
+            ]
+        });
     };
 
     handlePhoneHint = () => {
@@ -289,11 +259,7 @@ class ChatDetails extends React.Component {
 
         copy(formatPhoneNumber(phoneNumber));
 
-        const key = `${chatId}_copy_phone`;
-        const message = t('PhoneCopied');
-        const action = null;
-
-        this.handleScheduledAction(key, message, action);
+        this.handleScheduledAction(t('PhoneCopied'));
     };
 
     handleHeaderClick = () => {
@@ -306,7 +272,7 @@ class ChatDetails extends React.Component {
         if (!chat) return;
         if (!chat.photo) return;
 
-        setProfileMediaViewerContent({ chatId: chatId });
+        setProfileMediaViewerContent({ chatId });
 
         if (popup) {
             TdLibController.clientUpdate({
@@ -344,7 +310,6 @@ class ChatDetails extends React.Component {
             backButton,
             className,
             chatId,
-            classes,
             onClose,
             onOpenGroupInCommon,
             onOpenSharedAudios,
@@ -361,7 +326,6 @@ class ChatDetails extends React.Component {
         let { counters, migratedCounters } = this.props;
         counters = counters || [0, 0, 0, 0, 0, 0];
         migratedCounters = migratedCounters || [0, 0, 0, 0, 0, 0];
-        console.log('ChatDetails.render counters', counters, migratedCounters);
 
         const [photoCount, videoCount, documentCount, audioCount, urlCount, voiceAndVideoNoteCount] = counters.map(
             (el, i) => el + migratedCounters[i]
@@ -385,7 +349,7 @@ class ChatDetails extends React.Component {
 
         const username = getChatUsername(chatId);
         const phoneNumber = getChatPhoneNumber(chatId);
-        const bio = getChatBio(chatId);
+        let bio = getChatBio(chatId);
         const isGroup = isGroupChat(chatId);
         const isMe = isMeChat(chatId);
 
@@ -404,12 +368,19 @@ class ChatDetails extends React.Component {
             return getUserStatusOrder(y) - getUserStatusOrder(x);
         });
         const items = sortedUsers.map(user => (
-            <ListItem button className={classes.listItem} key={user.id}>
-                <UserControl userId={user.id} onSelect={this.handleOpenUser} />
+            <ListItem button className='list-item' key={user.id}>
+                <User userId={user.id} onSelect={this.handleOpenUser} />
             </ListItem>
         ));
 
         const { photo } = chat;
+
+        if (isGroupChat(chatId) || isChannelChat(chatId)) {
+            const { text: bioText, entities: bioEntities } = getUrlMentionHashtagEntities(bio, []);
+            if (bioEntities.length > 0) {
+                bio = getFormattedText({ '@type': 'formattedText', text: bioText, entities: bioEntities });
+            }
+        }
 
         const content = (
             <>
@@ -421,9 +392,10 @@ class ChatDetails extends React.Component {
                 />
                 <div ref={this.chatDetailsListRef} className='chat-details-list'>
                     <div className='chat-details-info'>
-                        <ChatControl
+                        <Chat
                             chatId={chatId}
-                            showStatus={popup}
+                            big={true}
+                            showStatus={true}
                             showSavedMessages={!popup}
                             onTileSelect={photo ? this.handleOpenViewer : null}
                         />
@@ -432,7 +404,7 @@ class ChatDetails extends React.Component {
                         <>
                             <List>
                                 {username && (
-                                    <ListItem button className={classes.listItem} onClick={this.handleUsernameHint}>
+                                    <ListItem button className='list-item' onClick={this.handleUsernameHint}>
                                         <ListItemIcon>
                                             <AlternateEmailIcon />
                                         </ListItemIcon>
@@ -447,7 +419,7 @@ class ChatDetails extends React.Component {
                                 )}
                                 {phoneNumber && (
                                     <>
-                                        <ListItem button className={classes.listItem} onClick={this.handlePhoneHint}>
+                                        <ListItem button className='list-item' onClick={this.handlePhoneHint}>
                                             <ListItemIcon>
                                                 <CallIcon />
                                             </ListItemIcon>
@@ -462,7 +434,7 @@ class ChatDetails extends React.Component {
                                     </>
                                 )}
                                 {bio && (
-                                    <ListItem className={classes.listItem}>
+                                    <ListItem className='list-item' alignItems='flex-start'>
                                         <ListItemIcon>
                                             <ErrorOutlineIcon className='chat-details-info-icon' />
                                         </ListItemIcon>
@@ -480,16 +452,16 @@ class ChatDetails extends React.Component {
                             <Divider />
                             <List>
                                 {!isMe && <NotificationsListItem chatId={chatId} />}
-                                {isGroup && <MoreListItem chatId={chatId} />}
+                                {/*{isGroup && <MoreListItem chatId={chatId} />}*/}
                                 {popup && !isGroup && (
-                                    <ListItem button className={classes.listItem} onClick={this.handleOpenChat}>
+                                    <ListItem button className='list-item' onClick={this.handleOpenChat}>
                                         <ListItemText
-                                            inset
                                             primary={
                                                 <Typography color='primary' variant='inherit' noWrap>
                                                     {t('SendMessage').toUpperCase()}
                                                 </Typography>
                                             }
+                                            style={{ paddingLeft: 40 }}
                                         />
                                     </ListItem>
                                 )}
@@ -507,7 +479,7 @@ class ChatDetails extends React.Component {
                             <Divider />
                             <List>
                                 {photoCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedPhotos}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedPhotos}>
                                         <ListItemIcon>
                                             <PhotoIcon />
                                         </ListItemIcon>
@@ -521,7 +493,7 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {videoCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedVideos}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedVideos}>
                                         <ListItemIcon>
                                             <VideocamIcon />
                                         </ListItemIcon>
@@ -535,7 +507,7 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {documentCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedDocuments}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedDocuments}>
                                         <ListItemIcon>
                                             <InsertDriveFileIcon />
                                         </ListItemIcon>
@@ -549,7 +521,7 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {audioCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedAudios}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedAudios}>
                                         <ListItemIcon>
                                             <HeadsetIcon />
                                         </ListItemIcon>
@@ -563,7 +535,7 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {urlCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedLinks}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedLinks}>
                                         <ListItemIcon>
                                             <InsertLinkIcon />
                                         </ListItemIcon>
@@ -577,7 +549,7 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {voiceAndVideoNoteCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenSharedVoiceNotes}>
+                                    <ListItem button className='list-item' onClick={onOpenSharedVoiceNotes}>
                                         <ListItemIcon>
                                             <MicIcon />
                                         </ListItemIcon>
@@ -593,12 +565,11 @@ class ChatDetails extends React.Component {
                                     </ListItem>
                                 )}
                                 {groupInCommonCount > 0 && (
-                                    <ListItem button className={classes.listItem} onClick={onOpenGroupInCommon}>
+                                    <ListItem button className='list-item' onClick={onOpenGroupInCommon}>
                                         <ListItemIcon>
                                             <GroupIcon />
                                         </ListItemIcon>
                                         <ListItemText
-                                            inset
                                             primary={
                                                 <Typography variant='inherit' noWrap>
                                                     {groupInCommonCount === 1
@@ -627,7 +598,7 @@ class ChatDetails extends React.Component {
 }
 
 ChatDetails.propTypes = {
-    chatId: PropTypes.number.isRequired,
+    chatId: PropTypes.number,
     popup: PropTypes.bool,
     onClose: PropTypes.func,
     onOpenGroupInCommon: PropTypes.func,
@@ -642,7 +613,6 @@ ChatDetails.propTypes = {
 const enhance = compose(
     withSaveRef(),
     withTranslation(),
-    withStyles(styles, { withTheme: true }),
     withSnackbar,
     withRestoreRef()
 );

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { EventEmitter } from 'events';
+import EventEmitter from './EventEmitter';
 import { getLocationId } from '../Utils/Message';
 import { FILE_PRIORITY, IV_LOCATION_HEIGHT, IV_LOCATION_WIDTH, THUMBNAIL_PRIORITY } from '../Constants';
 import TdLibController from '../Controllers/TdLibController';
@@ -20,7 +20,8 @@ class FileStore extends EventEmitter {
         this.reset();
 
         this.addTdLibListener();
-        this.setMaxListeners(Infinity);
+
+        // this.suppressUpdateFile = true;
     }
 
     reset = () => {
@@ -29,6 +30,7 @@ class FileStore extends EventEmitter {
         //this.transactionCount = 0;
         this.db = null;
         this.urls = new WeakMap();
+        this.dataUrls = new Map();
         this.items = new Map();
         this.blobItems = new Map();
         this.locationItems = new Map();
@@ -49,7 +51,9 @@ class FileStore extends EventEmitter {
 
                 this.onUpdateFile(update);
 
-                this.emit(update['@type'], update);
+                if (!this.suppressUpdateFile) {
+                    this.emit(update['@type'], update);
+                }
                 break;
             }
             default:
@@ -71,19 +75,23 @@ class FileStore extends EventEmitter {
                 this.emit(update['@type'], update);
                 break;
             }
+            case 'clientUpdateSendFiles': {
+                this.emit(update['@type'], update);
+                break;
+            }
             default:
                 break;
         }
     };
 
     addTdLibListener = () => {
-        TdLibController.addListener('update', this.onUpdate);
-        TdLibController.addListener('clientUpdate', this.onClientUpdate);
+        TdLibController.on('update', this.onUpdate);
+        TdLibController.on('clientUpdate', this.onClientUpdate);
     };
 
     removeTdLibListener = () => {
-        TdLibController.removeListener('update', this.onUpdate);
-        TdLibController.removeListener('clientUpdate', this.onClientUpdate);
+        TdLibController.off('update', this.onUpdate);
+        TdLibController.off('clientUpdate', this.onClientUpdate);
     };
 
     onUpdateAuthorizationState = async update => {
@@ -358,7 +366,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (animation.thumbnail) {
-            const source = animation.thumbnail.photo;
+            const source = animation.thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -389,7 +397,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (audio.album_cover_thumbnail) {
-            const source = audio.album_cover_thumbnail.photo;
+            const source = audio.album_cover_thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -433,7 +441,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (document.thumbnail) {
-            const { photo: source } = document.thumbnail;
+            const source = document.thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -527,7 +535,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (sticker.thumbnail) {
-            const source = sticker.thumbnail.photo;
+            const source = sticker.thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -576,7 +584,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (videoNote.thumbnail) {
-            const source = videoNote.thumbnail.photo;
+            const source = videoNote.thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -607,7 +615,7 @@ class FileStore extends EventEmitter {
         const messageId = obj ? obj.id : 0;
 
         if (video.thumbnail) {
-            const source = video.thumbnail.photo;
+            const source = video.thumbnail.file;
             if (source && source.id === file.id) {
                 this.getLocalFile(
                     store,
@@ -645,28 +653,28 @@ class FileStore extends EventEmitter {
 
             return;*/
         if (this.db) {
-            console.log('[FileStore] db exists');
+            // console.log('[FileStore] db exists');
             if (callback) callback();
             return;
         }
 
         if (this.initiatingDB) {
-            console.log('[FileStore] add callback');
+            // console.log('[FileStore] add callback');
             if (callback) this.callbacks.push(callback);
             return;
         }
 
-        console.log('[FileStore] start initDB');
+        // console.log('[FileStore] start initDB');
         if (callback) this.callbacks.push(callback);
 
         this.initiatingDB = true;
         this.db = await this.openDB().catch(error => console.log('[FileStore] initDB error', error));
         this.initiatingDB = false;
 
-        console.log('[FileStore] stop initDB');
+        // console.log('[FileStore] stop initDB');
 
         if (this.callbacks.length) {
-            console.log('[FileStore] invoke callbacks count=' + this.callbacks.length);
+            // console.log('[FileStore] invoke callbacks count=' + this.callbacks.length);
             for (let i = 0; i < this.callbacks.length; i++) {
                 this.callbacks[i]();
             }
@@ -862,6 +870,26 @@ class FileStore extends EventEmitter {
         this.set(file);
     };
 
+    getDataUrl = id => {
+        if (!id) {
+            return null;
+        }
+
+        if (this.dataUrls.has(id)) {
+            return this.dataUrls.get(id);
+        }
+
+        return null;
+    };
+
+    setDataUrl = (id, dataUrl) => {
+        this.dataUrls.set(id, dataUrl);
+    };
+
+    deleteDataUrl = id => {
+        this.dataUrls.delete(id);
+    };
+
     getBlobUrl = blob => {
         if (!blob) {
             return null;
@@ -885,138 +913,138 @@ class FileStore extends EventEmitter {
 
     updatePhotoBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdatePhotoBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateAudioThumbnailBlob = (chatId, messageId, fileId) => {
         TdLibController.clientUpdate({
             '@type': 'clientUpdateAudioThumbnailBlob',
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateAudioBlob = (chatId, messageId, fileId) => {
         TdLibController.clientUpdate({
             '@type': 'clientUpdateAudioBlob',
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateVoiceNoteBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateVoiceNoteBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateVideoNoteThumbnailBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateVideoNoteThumbnailBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateVideoNoteBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateVideoNoteBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateAnimationThumbnailBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateAnimationThumbnailBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateAnimationBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateAnimationBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateDocumentBlob = (chatId, messageId, fileId) => {
         TdLibController.clientUpdate({
             '@type': 'clientUpdateDocumentBlob',
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateVideoThumbnailBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateVideoThumbnailBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateVideoBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateVideoBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateStickerThumbnailBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateStickerThumbnailBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateStickerBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateStickerBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateLocationBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateLocationBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateDocumentThumbnailBlob = (chatId, messageId, fileId) => {
         this.emit('clientUpdateDocumentThumbnailBlob', {
-            chatId: chatId,
-            messageId: messageId,
-            fileId: fileId
+            chatId,
+            messageId,
+            fileId
         });
     };
 
     updateUserPhotoBlob(userId, fileId) {
         this.emit('clientUpdateUserBlob', {
-            userId: userId,
-            fileId: fileId
+            userId,
+            fileId
         });
     }
 
     updateChatPhotoBlob(chatId, fileId) {
         this.emit('clientUpdateChatBlob', {
-            chatId: chatId,
-            fileId: fileId
+            chatId,
+            fileId
         });
     }
 }

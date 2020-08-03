@@ -8,35 +8,63 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import classNames from 'classnames';
-import { getUserLetters } from '../../Utils/User';
-import { getSrc, loadChatContent } from '../../Utils/File';
-import UserStore from '../../Stores/UserStore';
-import ChatStore from '../../Stores/ChatStore';
+import { withTranslation } from 'react-i18next';
+import DeletedAccountIcon from '../../Assets/Icons/DeletedAccount';
+import { getUserLetters, isDeletedUser } from '../../Utils/User';
+import { getSrc, loadUserContent } from '../../Utils/File';
 import FileStore from '../../Stores/FileStore';
+import UserStore from '../../Stores/UserStore';
 import './UserTile.css';
 
 class UserTile extends Component {
-    constructor(props) {
-        super(props);
+    state = { };
 
-        if (process.env.NODE_ENV !== 'production') {
-            this.state = {
-                user: UserStore.get(this.props.userId),
-                loaded: false
-            };
-        } else {
-            this.state = {
-                loaded: false
+    static getDerivedStateFromProps(props, state) {
+        const { userId, firstName, lastName, t } = props;
+
+        if (state.prevUserId !== userId) {
+            const user = UserStore.get(userId);
+            const file = user && user.profile_photo ? user.profile_photo.small : null;
+
+            const fileId = file ? file.id : -1;
+            const src = getSrc(file);
+            const loaded = state.src === src && src !== '' || fileId === -1;
+            const letters = getUserLetters(userId, firstName, lastName, t);
+
+            return {
+                prevUserId: userId,
+
+                fileId,
+                src,
+                loaded,
+                letters
             };
         }
+
+        return null;
     }
 
     shouldComponentUpdate(nextProps, nextState) {
-        if (nextProps.userId !== this.props.userId) {
+        const { userId } = this.props;
+        const { fileId, src, loaded, letters } = this.state;
+
+        if (nextProps.userId !== userId) {
             return true;
         }
 
-        if (nextState.loaded !== this.state.loaded) {
+        if (nextState.fileId !== fileId) {
+            return true;
+        }
+
+        if (nextState.src !== src) {
+            return true;
+        }
+
+        if (nextState.loaded !== loaded) {
+            return true;
+        }
+
+        if (nextState.letters !== letters) {
             return true;
         }
 
@@ -44,106 +72,59 @@ class UserTile extends Component {
     }
 
     componentDidMount() {
+        UserStore.on('updateUser', this.onUpdateUser);
         FileStore.on('clientUpdateUserBlob', this.onClientUpdateUserBlob);
-        FileStore.on('clientUpdateChatBlob', this.onClientUpdateChatBlob);
-        ChatStore.on('updateChatPhoto', this.onUpdateChatPhoto);
-        ChatStore.on('updateChatTitle', this.onUpdateChatTitle);
     }
 
     componentWillUnmount() {
-        FileStore.removeListener('clientUpdateUserBlob', this.onClientUpdateUserBlob);
-        FileStore.removeListener('clientUpdateChatBlob', this.onClientUpdateChatBlob);
-        ChatStore.removeListener('updateChatPhoto', this.onUpdateChatPhoto);
-        ChatStore.removeListener('updateChatTitle', this.onUpdateChatTitle);
+        UserStore.off('updateUser', this.onUpdateUser);
+        FileStore.off('clientUpdateUserBlob', this.onClientUpdateUserBlob);
     }
 
     onClientUpdateUserBlob = update => {
         const { userId } = this.props;
+        const { fileId, loaded } = this.state;
 
         if (userId !== update.userId) return;
+        if (fileId !== update.fileId) return;
 
-        if (this.state.loaded) {
-            this.setState({ loaded: false });
-        } else {
-            this.forceUpdate();
+        if (!loaded) {
+            const user = UserStore.get(userId);
+            if (!user) {
+                return null;
+            }
+
+            const file = user && user.profile_photo ? user.profile_photo.small : null;
+            const src = getSrc(file);
+
+            this.setState({ src });
         }
     };
 
-    onClientUpdateChatBlob = update => {
-        const { userId } = this.props;
-        const { chatId } = update;
+    onUpdateUser = update => {
+        const { userId, firstName, lastName, t } = this.props;
+        const { user } = update;
 
-        const chat = ChatStore.get(chatId);
-        if (!chat) return;
-        if (!chat.type) return;
+        if (!user) return;
+        if (userId !== user.id) return;
 
-        switch (chat.type['@type']) {
-            case 'chatTypeBasicGroup':
-            case 'chatTypeSupergroup': {
-                return;
-            }
-            case 'chatTypePrivate':
-            case 'chatTypeSecret': {
-                if (chat.type.user_id !== userId) return;
+        const file = user && user.profile_photo ? user.profile_photo.small : null;
 
-                if (this.state.loaded) {
-                    this.setState({ loaded: false });
-                } else {
-                    this.forceUpdate();
-                }
-            }
-        }
-    };
+        const fileId = file ? file.id : -1;
+        const src = getSrc(file);
+        const loaded = this.state.src === src && src !== '' || fileId === -1;
+        const letters = getUserLetters(userId, firstName, lastName, t);
 
-    onUpdateChatPhoto = update => {
-        const { userId } = this.props;
-        const { chat_id, photo } = update;
+        this.setState({
+            src,
+            fileId,
+            loaded,
+            letters
+        });
 
-        const chat = ChatStore.get(chat_id);
-        if (!chat) return;
-        if (!chat.type) return;
-
-        switch (chat.type['@type']) {
-            case 'chatTypeBasicGroup':
-            case 'chatTypeSupergroup': {
-                return;
-            }
-            case 'chatTypePrivate':
-            case 'chatTypeSecret': {
-                if (chat.type.user_id !== userId) return;
-
-                if (this.state.loaded) {
-                    this.setState({ loaded: false });
-                } else {
-                    this.forceUpdate();
-                }
-
-                if (photo) {
-                    const store = FileStore.getStore();
-                    loadChatContent(store, chat);
-                }
-            }
-        }
-    };
-
-    onUpdateChatTitle = update => {
-        const { userId } = this.props;
-
-        const chat = ChatStore.get(update.chat_id);
-        if (!chat) return;
-        if (!chat.type) return;
-
-        switch (chat.type['@type']) {
-            case 'chatTypeBasicGroup':
-            case 'chatTypeSupergroup': {
-                return;
-            }
-            case 'chatTypePrivate':
-            case 'chatTypeSecret': {
-                if (chat.type.user_id !== userId && !chat.photo) return;
-
-                this.forceUpdate();
-            }
+        if (file) {
+            const store = FileStore.getStore();
+            loadUserContent(store, userId);
         }
     };
 
@@ -160,21 +141,48 @@ class UserTile extends Component {
     };
 
     render() {
-        const { userId, fistName, lastName, onSelect } = this.props;
-        const { loaded } = this.state;
+        const { className, userId, fistName, lastName, onSelect, small, dialog, poll } = this.props;
+        const { fileId, src, loaded, letters } = this.state;
 
         const user = UserStore.get(userId);
         if (!user && !(fistName || lastName)) return null;
 
-        const letters = getUserLetters(userId, fistName, lastName);
-        const src = getSrc(user && user.profile_photo ? user.profile_photo.small : null);
-        const tileLoaded = src && loaded;
+        if (isDeletedUser(userId)) {
+            return (
+                <div
+                    className={classNames(
+                        className,
+                        'user-tile',
+                        'tile_color_0',
+                        { pointer: onSelect },
+                        { 'tile-dialog': dialog },
+                        { 'tile-small': small },
+                        { 'tile-poll': poll }
+                    )}
+                    onClick={this.handleSelect}>
+                    <div className='tile-photo'>
+                        <div className='tile-saved-messages'>
+                            <DeletedAccountIcon fontSize='default' />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
 
-        const tileColor = `tile_color_${(Math.abs(userId) % 8) + 1}`;
+        const tileLoaded = src && loaded;
+        const tileColor = `tile_color_${(Math.abs(userId) % 7) + 1}`;
 
         return (
             <div
-                className={classNames('user-tile', { [tileColor]: !tileLoaded }, { pointer: onSelect })}
+                className={classNames(
+                    className,
+                    'user-tile',
+                    { [tileColor]: !tileLoaded },
+                    { pointer: onSelect },
+                    { 'tile-dialog': dialog },
+                    { 'tile-small': small },
+                    { 'tile-poll': poll }
+                )}
                 onClick={this.handleSelect}>
                 {!tileLoaded && (
                     <div className='tile-photo'>
@@ -191,7 +199,8 @@ UserTile.propTypes = {
     userId: PropTypes.number.isRequired,
     firstName: PropTypes.string,
     lastName: PropTypes.string,
-    onSelect: PropTypes.func
+    onSelect: PropTypes.func,
+    small: PropTypes.bool
 };
 
-export default UserTile;
+export default withTranslation()(UserTile);

@@ -7,6 +7,51 @@
 
 import TdLibController from '../Controllers/TdLibController';
 
+export function openArchive() {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateArchive',
+        open: true
+    });
+}
+
+export function closeArchive() {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateArchive',
+        open: false
+    });
+}
+
+export function editMessage(chatId, messageId) {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateEditMessage',
+        chatId,
+        messageId
+    });
+}
+
+export function deleteMessages(chatId, messageIds) {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateDeleteMessages',
+        chatId,
+        messageIds
+    });
+}
+
+export function replyMessage(chatId, messageId) {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateReply',
+        chatId,
+        messageId
+    });
+}
+
+export function forward(info) {
+    TdLibController.clientUpdate({
+        '@type': 'clientUpdateForward',
+        info
+    });
+}
+
 export function forwardMessages(chatId, messageIds) {
     TdLibController.clientUpdate({
         '@type': 'clientUpdateForward',
@@ -68,8 +113,11 @@ export function selectMessage(chatId, messageId, selected) {
     });
 }
 
+export function clearSelection() {
+    TdLibController.clientUpdate({ '@type': 'clientUpdateClearSelection' });
+}
+
 export function setInstantViewViewerContent(content) {
-    console.log('[IV] setInstantViewViewerContent');
     TdLibController.clientUpdate({
         '@type': 'clientUpdateInstantViewViewerContent',
         content

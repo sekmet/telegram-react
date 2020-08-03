@@ -7,8 +7,9 @@
 
 import SupergroupStore from '../Stores/SupergroupStore';
 import ChatStore from '../Stores/ChatStore';
+import { getSupergroupId } from './Chat';
 
-function getSupergroupStatus(supergroup, chatId) {
+export function getSupergroupStatus(supergroup, chatId) {
     if (!supergroup) return null;
 
     let { status, is_channel, member_count: count } = supergroup;
@@ -35,4 +36,17 @@ function getSupergroupStatus(supergroup, chatId) {
     return `${count} members`;
 }
 
-export { getSupergroupStatus };
+export function isPublicSupergroup(chatId) {
+    const chat = ChatStore.get(chatId);
+    if (!chat) return false;
+
+    const supergroupId = getSupergroupId(chatId);
+    if (!supergroupId) return false;
+
+    const supergroup = SupergroupStore.get(supergroupId);
+    if (!supergroup) return false;
+
+    const { username } = supergroup;
+
+    return Boolean(username);
+}

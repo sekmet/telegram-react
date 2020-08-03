@@ -8,70 +8,65 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
 import { withTranslation } from 'react-i18next';
 import Button from '@material-ui/core/Button';
 import Dialog from '@material-ui/core/Dialog';
 import DialogActions from '@material-ui/core/DialogActions';
 import DialogContent from '@material-ui/core/DialogContent';
 import DialogTitle from '@material-ui/core/DialogTitle';
+import IconButton from '@material-ui/core/IconButton';
 import Typography from '@material-ui/core/Typography';
+import CloseIcon from '../../Assets/Icons/Close';
 import ShareStickerSetButton from './ShareStickerSetButton';
 import Sticker, { StickerSourceEnum } from '../Message/Media/Sticker';
 import StickerPreview from '../ColumnMiddle/StickerPreview';
 import { loadStickerContent, loadStickerSetContent } from '../../Utils/File';
+import { modalManager } from '../../Utils/Modal';
 import { STICKER_SMALL_DISPLAY_SIZE } from '../../Constants';
 import FileStore from '../../Stores/FileStore';
 import StickerStore from '../../Stores/StickerStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './StickerSetDialog.css';
 
-const styles = theme => ({
-    contentRoot: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        maxHeight: 480,
-        padding: '0 12px 24px',
-        background: 'transparent'
-    },
-    paperRoot: {
-        width: 344
-    },
-    dialogTitleRoot: {
-        display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center'
-    },
-    dialogRoot: {
-        color: theme.palette.text.primary
-    },
-    shareButtonRoot: {
-        margin: '-24px -12px -24px 0'
-    },
-    typographyRoot: {
-        flexGrow: 1,
-        flexShrink: 1
-    },
-    disablePointerEvents: {
-        pointerEvents: 'none'
-    }
-});
-
 class StickerSetDialog extends React.Component {
     constructor(props) {
         super(props);
 
+        this.contentRef = React.createRef();
+
         this.state = {
             stickerSet: StickerStore.stickerSet,
-            stickerId: 0
+            stickerId: 0,
+            scroll: false,
+            scrollTop: false,
+            scrollBottom: false
         };
     }
 
     shouldComponentUpdate(nextProps, nextState, nextContext) {
-        const { stickerSet, sticker } = this.state;
+        const { stickerSet, sticker, scroll, scrollTop, scrollBottom } = this.state;
 
-        return stickerSet !== nextState.stickerSet || sticker !== nextState.sticker;
+        if (stickerSet !== nextState.stickerSet) {
+            return true;
+        }
+
+        if (sticker !== nextState.sticker) {
+            return true;
+        }
+
+        if (scroll !== nextState.scroll) {
+            return true;
+        }
+
+        if (scrollTop !== nextState.scrollTop) {
+            return true;
+        }
+
+        if (scrollBottom !== nextState.scrollBottom) {
+            return true;
+        }
+
+        return false;
     }
 
     componentDidMount() {
@@ -80,8 +75,8 @@ class StickerSetDialog extends React.Component {
     }
 
     componentWillUnmount() {
-        StickerStore.removeListener('clientUpdateStickerSet', this.handleClientUpdateStickerSet);
-        StickerStore.removeListener('updateInstalledStickerSets', this.handleUpdateInstalledStickerSets);
+        StickerStore.off('clientUpdateStickerSet', this.handleClientUpdateStickerSet);
+        StickerStore.off('updateInstalledStickerSets', this.handleUpdateInstalledStickerSets);
     }
 
     handleUpdateInstalledStickerSets = update => {
@@ -93,7 +88,11 @@ class StickerSetDialog extends React.Component {
     handleClientUpdateStickerSet = update => {
         const { stickerSet } = update;
 
-        this.setState({ stickerSet });
+        this.setState({ stickerSet }, () => {
+            setTimeout(() => {
+                this.handleScroll();
+            }, 0);
+        });
 
         if (stickerSet) {
             const store = FileStore.getStore();
@@ -149,7 +148,7 @@ class StickerSetDialog extends React.Component {
         const index = stickers.findIndex(x => x.sticker.id === stickerId);
         if (index === -1) return [];
 
-        const STICKERS_PER_ROW = 4;
+        const STICKERS_PER_ROW = 5;
         const row = Math.floor(index / STICKERS_PER_ROW);
         const column = index % STICKERS_PER_ROW;
 
@@ -269,9 +268,27 @@ class StickerSetDialog extends React.Component {
         return false;
     };
 
+    handleScroll = () => {
+        const content = this.contentRef.current;
+        if (!content) {
+            return;
+        }
+
+        const hasScroll = content.scrollHeight > content.offsetHeight;
+        const scrollTop = hasScroll && content.scrollTop === 0;
+        const scrollBottom = hasScroll && (content.scrollTop + content.offsetHeight) === content.scrollHeight;
+        const scroll = hasScroll && content.scrollTop > 0 && (content.scrollTop + content.offsetHeight) < content.scrollHeight;
+
+        this.setState({
+            scrollTop,
+            scrollBottom,
+            scroll
+        });
+    }
+
     render() {
-        const { t, classes } = this.props;
-        const { stickerSet, sticker } = this.state;
+        const { t } = this.props;
+        const { stickerSet, sticker, scroll, scrollTop, scrollBottom } = this.state;
         if (!stickerSet) return null;
 
         const { title, stickers, is_installed } = stickerSet;
@@ -281,7 +298,6 @@ class StickerSetDialog extends React.Component {
                 className='sticker-set-dialog-item'
                 key={x.sticker.id}
                 data-sticker-id={x.sticker.id}
-                style={{ width: 76, height: 76 }}
                 onMouseEnter={this.handleMouseEnter}
                 onMouseDown={this.handleMouseDown}>
                 <Sticker
@@ -300,35 +316,42 @@ class StickerSetDialog extends React.Component {
 
         return (
             <Dialog
-                className={classes.dialogRoot}
+                className={classNames(
+                    'sticker-set-dialog',
+                    { 'sticker-set-dialog-scroll': scroll },
+                    { 'sticker-set-dialog-scroll-top': scrollTop },
+                    { 'sticker-set-dialog-scroll-bottom': scrollBottom },
+                )}
                 open
+                manager={modalManager}
                 transitionDuration={0}
                 onClose={this.handleClose}
                 aria-labelledby='sticker-set-dialog-title-text'
-                classes={{ paper: classes.paperRoot }}>
+                classes={{ paper: 'sticker-set-dialog-paper' }}>
                 <DialogTitle
-                    id='sticker-set-dialog-title-text'
-                    className={classNames(classes.dialogTitleRoot, {
-                        [classes.disablePointerEvents]: Boolean(sticker)
-                    })}
+                    className={classNames('sticker-set-dialog-title', { 'sticker-set-dialog-disabled': Boolean(sticker) })}
                     disableTypography>
-                    <Typography variant='h6' className={classes.typographyRoot} noWrap>
+                    <IconButton
+                        aria-label='Close'
+                        onClick={this.handleClose}>
+                        <CloseIcon />
+                    </IconButton>
+                    <Typography variant='h6' id='sticker-set-dialog-title-text' className='sticker-set-dialog-title-typography' noWrap>
                         {title}
                     </Typography>
-                    <ShareStickerSetButton className={classes.shareButtonRoot} />
+                    <ShareStickerSetButton />
                 </DialogTitle>
                 <DialogContent
-                    classes={{ root: classes.contentRoot }}
+                    ref={this.contentRef}
+                    classes={{ root: 'sticker-set-dialog-content-root' }}
                     onMouseOver={this.handleMouseOver}
-                    onMouseOut={this.handleMouseOut}>
+                    onMouseOut={this.handleMouseOut}
+                    onScroll={this.handleScroll}>
                     {items}
                 </DialogContent>
-                <DialogActions className={classNames({ [classes.disablePointerEvents]: Boolean(sticker) })}>
-                    <Button color='primary' onClick={this.handleClose}>
-                        {t('Cancel')}
-                    </Button>
-                    <Button color='primary' onClick={this.handleDone}>
-                        {is_installed ? t('StickersRemove') : t('Add')}
+                <DialogActions className={classNames('sticker-set-dialog-actions', { 'sticker-set-dialog-disabled': Boolean(sticker) })}>
+                    <Button className='sticker-set-dialog-action-button' disableElevation variant='contained' color={is_installed ? 'secondary' : 'primary'} onClick={this.handleDone}>
+                        {is_installed ? t('StickersRemove') : t('AddStickers')}
                     </Button>
                 </DialogActions>
                 {<StickerPreview sticker={sticker} />}
@@ -339,9 +362,4 @@ class StickerSetDialog extends React.Component {
 
 StickerSetDialog.propTypes = {};
 
-const enhance = compose(
-    withStyles(styles),
-    withTranslation()
-);
-
-export default enhance(StickerSetDialog);
+export default withTranslation()(StickerSetDialog);

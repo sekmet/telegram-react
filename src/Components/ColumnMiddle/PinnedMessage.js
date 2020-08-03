@@ -7,42 +7,25 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
 import { withTranslation } from 'react-i18next';
 import Button from '@material-ui/core/Button';
-import CloseIcon from '@material-ui/icons/Close';
 import Dialog from '@material-ui/core/Dialog';
 import DialogActions from '@material-ui/core/DialogActions';
 import DialogContent from '@material-ui/core/DialogContent';
 import DialogContentText from '@material-ui/core/DialogContentText';
 import DialogTitle from '@material-ui/core/DialogTitle';
-import IconButton from '@material-ui/core/IconButton';
 import ReplyTile from '../Tile/ReplyTile';
-import { accentStyles, borderStyle } from '../Theme';
 import { canPinMessages } from '../../Utils/Chat';
-import { getContent, getReplyPhotoSize, isDeletedMessage } from '../../Utils/Message';
+import { getContent, getReplyMinithumbnail, getReplyPhotoSize, isDeletedMessage } from '../../Utils/Message';
 import { loadMessageContents } from '../../Utils/File';
 import { openChat } from '../../Actions/Client';
+import { modalManager } from '../../Utils/Modal';
+import AppStore from '../../Stores/ApplicationStore';
 import ChatStore from '../../Stores/ChatStore';
 import FileStore from '../../Stores/FileStore';
 import MessageStore from '../../Stores/MessageStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './PinnedMessage.css';
-import AppStore from '../../Stores/ApplicationStore';
-
-const styles = theme => ({
-    ...accentStyles(theme),
-    ...borderStyle(theme),
-    pinnedMessage: {
-        background: theme.palette.type === 'dark' ? theme.palette.background.default : '#FFFFFF',
-        color: theme.palette.text.primary
-    },
-    pinnedMessageContentSubtitle: {
-        color: theme.palette.text.secondary
-    }
-});
 
 class PinnedMessage extends React.Component {
     constructor(props) {
@@ -81,14 +64,24 @@ class PinnedMessage extends React.Component {
 
         AppStore.on('clientUpdateDialogsReady', this.onClientUpdateDialogsReady);
         ChatStore.on('clientUpdateSetChatClientData', this.onClientUpdateSetChatClientData);
+        ChatStore.on('clientUpdateUnpin', this.onClientUpdateUnpin);
         ChatStore.on('updateChatPinnedMessage', this.onUpdateChatPinnedMessage);
     }
 
     componentWillUnmount() {
         AppStore.off('clientUpdateDialogsReady', this.onClientUpdateDialogsReady);
         ChatStore.off('clientUpdateSetChatClientData', this.onClientUpdateSetChatClientData);
+        ChatStore.off('clientUpdateUnpin', this.onClientUpdateUnpin);
         ChatStore.off('updateChatPinnedMessage', this.onUpdateChatPinnedMessage);
     }
+
+    onClientUpdateUnpin = update => {
+        const { chatId } = update;
+
+        if (this.props.chatId !== chatId) return;
+
+        this.handleDelete();
+    };
 
     onClientUpdateDialogsReady = update => {
         const { messageId } = this.state;
@@ -195,8 +188,10 @@ class PinnedMessage extends React.Component {
     };
 
     handleDelete = async event => {
-        event.preventDefault();
-        event.stopPropagation();
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
 
         const { chatId } = this.props;
         const { messageId } = this.state;
@@ -230,7 +225,7 @@ class PinnedMessage extends React.Component {
     };
 
     render() {
-        const { chatId, classes, t } = this.props;
+        const { chatId, t } = this.props;
         const { messageId, confirm } = this.state;
 
         if (!chatId) return null;
@@ -243,6 +238,7 @@ class PinnedMessage extends React.Component {
 
         let content = !message ? t('Loading') : getContent(message, t);
         const photoSize = getReplyPhotoSize(chatId, messageId);
+        const minithumbnail = getReplyMinithumbnail(chatId, messageId);
 
         if (isDeletedMessage(message)) {
             content = t('DeletedMessage');
@@ -250,33 +246,24 @@ class PinnedMessage extends React.Component {
 
         return (
             <>
-                <div
-                    className={classNames('pinned-message', classes.pinnedMessage, classes.borderColor)}
-                    onClick={this.handleClick}>
-                    <div className='pinned-message-wrapper'>
-                        <div className={classNames('reply-border', classes.accentBackgroundLight)} />
-                        {photoSize && <ReplyTile chatId={chatId} messageId={messageId} photoSize={photoSize} />}
-                        <div className='pinned-message-content'>
-                            <div className={classNames('pinned-message-content-title', classes.accentColorMain)}>
-                                {t('PinnedMessage')}
-                            </div>
-                            <div
-                                className={classNames(
-                                    'pinned-message-content-subtitle',
-                                    classes.pinnedMessageContentSubtitle
-                                )}>
-                                {content}
-                            </div>
-                        </div>
-                        <div className='pinned-message-delete-button'>
-                            <IconButton onClick={this.handleDelete}>
-                                <CloseIcon />
-                            </IconButton>
-                        </div>
+                <div className='pinned-message' onMouseDown={this.handleClick}>
+                    <div className='border reply-border' />
+                    {photoSize && (
+                        <ReplyTile
+                            chatId={chatId}
+                            messageId={messageId}
+                            photoSize={photoSize}
+                            minithumbnail={minithumbnail}
+                        />
+                    )}
+                    <div className='pinned-message-content'>
+                        <div className='pinned-message-title'>{t('PinnedMessage')}</div>
+                        <div className='pinned-message-subtitle'>{content}</div>
                     </div>
                 </div>
                 {confirm && (
                     <Dialog
+                        manager={modalManager}
                         transitionDuration={0}
                         open
                         onClose={this.handleClose}
@@ -304,9 +291,4 @@ PinnedMessage.propTypes = {
     chatId: PropTypes.number.isRequired
 };
 
-const enhance = compose(
-    withStyles(styles, { withTheme: true }),
-    withTranslation()
-);
-
-export default enhance(PinnedMessage);
+export default withTranslation()(PinnedMessage);

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { EventEmitter } from 'events';
+import EventEmitter from '../Stores/EventEmitter';
 import packageJson from '../../package.json';
 import { stringToBoolean, getBrowser, getOSName } from '../Utils/Common';
 import {
@@ -17,6 +17,7 @@ import {
     WASM_FILE_NAME
 } from '../Constants';
 import TdClient from 'tdweb/dist/tdweb';
+// import TdClient from '@arseny30/tdweb/dist/tdweb';
 
 function databaseExists(dbname, callback) {
     var req = indexedDB.open(dbname);
@@ -45,9 +46,8 @@ class TdLibController extends EventEmitter {
             mode: 'wasm'
         };
 
-        this.disableLog = false;
-
-        this.setMaxListeners(Infinity);
+        this.disableLog = true;
+        this.streaming = true;
     }
 
     init = location => {
@@ -57,7 +57,7 @@ class TdLibController extends EventEmitter {
         const dbName = useTestDC ? 'tdlib_test' : 'tdlib';
 
         databaseExists(dbName, exists => {
-            this.clientUpdate({ '@type': 'clientUpdateDatabaseExists', exists });
+            this.clientUpdate({ '@type': 'clientUpdateTdLibDatabaseExists', exists });
 
             let options = {
                 logVerbosityLevel: verbosity,
@@ -153,19 +153,31 @@ class TdLibController extends EventEmitter {
         if (params.has('mode')) {
             this.parameters.mode = params.get('mode');
         }
+        if (params.has('clientlog')) {
+            this.disableLog = !stringToBoolean(params.get('clientlog'));
+        }
+        if (params.has('streaming')) {
+            this.streaming = stringToBoolean(params.get('streaming'));
+        }
     };
 
     send = request => {
+        if (!this.client) {
+            console.log('send (none init)', request);
+            return;
+        }
+
         if (!this.disableLog) {
             console.log('send', request);
+
             return this.client
                 .send(request)
                 .then(result => {
-                    console.log('receive result', result);
+                    console.log('send result', result);
                     return result;
                 })
                 .catch(error => {
-                    console.error('catch error', error);
+                    console.error('send error', error);
 
                     throw error;
                 });
@@ -178,7 +190,7 @@ class TdLibController extends EventEmitter {
         const apiId = process.env.REACT_APP_TELEGRAM_API_ID;
         const apiHash = process.env.REACT_APP_TELEGRAM_API_HASH;
 
-        console.log('[td] sendTdParameters', apiHash, apiId);
+        // console.log('[td] sendTdParameters', apiHash, apiId);
         if (!apiId || !apiHash) {
             if (
                 window.confirm(
@@ -241,8 +253,8 @@ class TdLibController extends EventEmitter {
     setChatId = (chatId, messageId = null) => {
         const update = {
             '@type': 'clientUpdateChatId',
-            chatId: chatId,
-            messageId: messageId
+            chatId,
+            messageId
         };
 
         this.clientUpdate(update);

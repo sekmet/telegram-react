@@ -5,7 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { EventEmitter } from 'events';
+import EventEmitter from './EventEmitter';
+import { getBlob } from '../Utils/File';
+import FileStore from './FileStore';
 import TdLibController from '../Controllers/TdLibController';
 
 class MessageStore extends EventEmitter {
@@ -15,7 +17,6 @@ class MessageStore extends EventEmitter {
         this.reset();
 
         this.addTdLibListener();
-        this.setMaxListeners(Infinity);
     }
 
     reset = () => {
@@ -38,10 +39,11 @@ class MessageStore extends EventEmitter {
 
                 break;
             }
-            case 'updateNewMessage':
+            case 'updateNewMessage': {
                 this.set(update.message);
                 this.emit('updateNewMessage', update);
                 break;
+            }
             case 'updateDeleteMessages':
                 this.emit('updateDeleteMessages', update);
                 break;
@@ -69,14 +71,39 @@ class MessageStore extends EventEmitter {
                 break;
             }
             case 'updateMessageContent': {
-                const chat = this.items.get(update.chat_id);
-                if (chat) {
-                    const message = chat.get(update.message_id);
-                    if (message) {
-                        update.old_content = message.content;
-                        message.content = update.new_content;
+                const { chat_id, message_id, new_content } = update;
+
+                const message = this.get(chat_id, message_id);
+                if (message) {
+                    update.old_content = message.content;
+                    message.content = new_content;
+
+                    switch (new_content['@type']) {
+                        case 'messagePhoto': {
+                            if (update.old_content['@type'] === 'messagePhoto') {
+                                const { photo: oldPhoto } = update.old_content;
+                                if (!oldPhoto) break;
+
+                                const { photo: newPhoto } = new_content;
+                                if (!newPhoto) break;
+
+                                const oldSize = oldPhoto.sizes.find(x => x.type === 'i');
+                                if (!oldSize) break;
+
+                                const newSize = newPhoto.sizes.find(x => x.type === 'i');
+                                if (newSize.photo.id === oldSize.photo.id) break;
+
+                                const oldBlob = getBlob(oldSize.photo);
+                                if (!oldBlob) break;
+
+                                FileStore.setBlob(newSize.photo.id, oldBlob);
+                            }
+
+                            break;
+                        }
                     }
                 }
+
                 this.emit('updateMessageContent', update);
                 break;
             }
@@ -107,9 +134,6 @@ class MessageStore extends EventEmitter {
                     const message = chat.get(update.old_message_id);
                     if (message) {
                         message.sending_state = update.message.sending_state;
-                    }
-                    if (update.old_message_id !== update.message.id) {
-                        this.set(update.message);
                     }
                 }
 
@@ -162,6 +186,14 @@ class MessageStore extends EventEmitter {
                 this.emit('clientUpdateClearSelection', update);
                 break;
             }
+            case 'clientUpdateEditMessage': {
+                this.emit('clientUpdateEditMessage', update);
+                break;
+            }
+            case 'clientUpdateMessageShake': {
+                this.emit('clientUpdateMessageShake', update);
+                break;
+            }
             case 'clientUpdateMessageHighlighted': {
                 this.emit('clientUpdateMessageHighlighted', update);
                 break;
@@ -187,6 +219,18 @@ class MessageStore extends EventEmitter {
                 this.emit('clientUpdateOpenReply', update);
                 break;
             }
+            case 'clientUpdateRecordStart': {
+                this.emit('clientUpdateRecordStart', update);
+                break;
+            }
+            case 'clientUpdateRecordStop': {
+                this.emit('clientUpdateRecordStop', update);
+                break;
+            }
+            case 'clientUpdateRecordError': {
+                this.emit('clientUpdateRecordError', update);
+                break;
+            }
             case 'clientUpdateReply': {
                 this.emit('clientUpdateReply', update);
                 break;
@@ -198,14 +242,18 @@ class MessageStore extends EventEmitter {
         }
     };
 
+    hasSelectedMessage(chatId, messageId) {
+        return this.selectedItems.has(`chatId=${chatId}_messageId=${messageId}`);
+    }
+
     addTdLibListener = () => {
-        TdLibController.addListener('update', this.onUpdate);
-        TdLibController.addListener('clientUpdate', this.onClientUpdate);
+        TdLibController.on('update', this.onUpdate);
+        TdLibController.on('clientUpdate', this.onClientUpdate);
     };
 
     removeTdLibListener = () => {
-        TdLibController.removeListener('update', this.onUpdate);
-        TdLibController.removeListener('clientUpdate', this.onClientUpdate);
+        TdLibController.off('update', this.onUpdate);
+        TdLibController.off('clientUpdate', this.onClientUpdate);
     };
 
     load(chatId, messageId) {
@@ -247,6 +295,8 @@ class MessageStore extends EventEmitter {
     }
 
     set(message) {
+        if (!message) return;
+
         let chat = this.items.get(message.chat_id);
         if (!chat) {
             chat = new Map();

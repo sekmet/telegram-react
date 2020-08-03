@@ -5,8 +5,61 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { formatNumber } from 'libphonenumber-js';
 import { PHOTO_SIZE, PHOTO_THUMBNAIL_SIZE } from '../Constants';
+
+export function compareMaps(map1, map2) {
+    if (!map1 || !map2) return false;
+
+    let testVal;
+    if (map1.size !== map2.size) {
+        return false;
+    }
+
+    for (let [key, val] of map1) {
+        testVal = map2.get(key);
+        // in cases of an undefined value, make sure the key
+        // actually exists on the object so there are no false positives
+        if (testVal !== val || (testVal === undefined && !map2.has(key))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+export function isMobile() {
+    return isAndroid() || isIOS() || isWindowsPhone();
+}
+
+export function isIOS() {
+    const iDevices = ['iPad Simulator', 'iPhone Simulator', 'iPod Simulator', 'iPad', 'iPhone', 'iPod'];
+
+    if (!!navigator.platform && iDevices.indexOf(navigator.platform) > -1) {
+        return true;
+    }
+
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+}
+
+export function isAndroid() {
+    const ua = navigator.userAgent.toLowerCase();
+    return ua.indexOf('android') > -1;
+}
+
+export function isWindowsPhone() {
+    if (navigator.userAgent.match(/Windows Phone/i)) {
+        return true;
+    }
+
+    if (navigator.userAgent.match(/iemobile/i)) {
+        return true;
+    }
+
+    if (navigator.userAgent.match(/WPDesktop/i)) {
+        return true;
+    }
+
+    return false;
+}
 
 function isAppleDevice() {
     const iDevices = ['iPad Simulator', 'iPhone Simulator', 'iPod Simulator', 'iPad', 'iPhone', 'iPod', 'MacIntel'];
@@ -16,36 +69,6 @@ function isAppleDevice() {
     }
 
     return /iPad|iPhone|iPod|Mac\sOS\sX/.test(navigator.userAgent) && !window.MSStream;
-}
-
-function isConnecting(state) {
-    if (!state) return false;
-
-    switch (state['@type']) {
-        case 'connectionStateConnecting': {
-            return true;
-        }
-        case 'connectionStateConnectingToProxy': {
-            return true;
-        }
-        case 'connectionStateReady': {
-            return false;
-        }
-        case 'connectionStateUpdating': {
-            return false;
-        }
-        case 'connectionStateWaitingForNetwork': {
-            return false;
-        }
-    }
-
-    return false;
-}
-
-function cleanProgressStatus(status) {
-    if (!status) return status;
-
-    return status.replace('...', '').replace('…', '');
 }
 
 function getOSName() {
@@ -85,20 +108,6 @@ function getBrowser() {
     return browser_name;
 }
 
-function isValidPhoneNumber(phoneNumber) {
-    if (!phoneNumber) return false;
-
-    let isBad = !phoneNumber.match(/^[\d\-+\s]+$/);
-    if (!isBad) {
-        phoneNumber = phoneNumber.replace(/\D/g, '');
-        if (phoneNumber.length < 7) {
-            isBad = true;
-        }
-    }
-
-    return !isBad;
-}
-
 function stringToBoolean(string) {
     switch (string.toLowerCase().trim()) {
         case 'true':
@@ -136,10 +145,10 @@ function getSize(sizes, dimension) {
     if (sizes.length === 0) return null;
     if (dimension === 0) return null;
 
-    // let iSize = sizes[2];//.find(x => x.type === 'i');
-    // if (iSize){
-    //     return iSize;
-    // }
+    let iSize = sizes.find(x => x.type === 'i');
+    if (iSize){
+        return iSize;
+    }
 
     let useWidth = sizes[0].width >= sizes[0].height;
     let diff = Math.abs(dimension - (useWidth ? sizes[0].width : sizes[0].height));
@@ -254,17 +263,20 @@ function debounce(func, wait, immediate) {
     };
 }
 
-function getFirstLetter(str) {
+export function getFirstLetter(str) {
     if (!str) return '';
-    for (let i = 0; i < str.length; i++) {
-        if (str[i].toUpperCase() !== str[i].toLowerCase()) {
-            return str[i];
-        } else if (str[i] >= '0' && str[i] <= '9') {
-            return str[i];
+
+    for (let char of str) {
+        if (char.toUpperCase() !== char.toLowerCase()) {
+            return char;
+        } else if (char >= '0' && char <= '9') {
+            return char;
+        } else if (char.length > 1) {
+            return char;
         }
     }
 
-    return '';
+    return [...str].length > 0 ? [...str][0] : '';
 }
 
 function getLetters(title) {
@@ -276,67 +288,37 @@ function getLetters(title) {
         return getFirstLetter(split[0]);
     }
     if (split.length > 1) {
-        return getFirstLetter(split[0]) + getFirstLetter(split[1]);
+        return getFirstLetter(split[0]) + getFirstLetter(split[split.length - 1]);
     }
 
     return null;
 }
 
-function readImageSize(file, callback) {
-    let useBlob = false;
-    // Create a new FileReader instance
-    // https://developer.mozilla.org/en/docs/Web/API/FileReader
-    var reader = new FileReader();
+async function readImageSize(file) {
+    return new Promise((resolve, reject) => {
+        let useBlob = false;
+        const reader = new FileReader();
 
-    // Once a file is successfully readed:
-    reader.addEventListener('load', function() {
-        // At this point `reader.result` contains already the Base64 Data-URL
-        // and we've could immediately show an image using
-        // `elPreview.insertAdjacentHTML("beforeend", "<img src='"+ reader.result +"'>");`
-        // But we want to get that image's width and height px values!
-        // Since the File Object does not hold the size of an image
-        // we need to create a new image and assign it's src, so when
-        // the image is loaded we can calculate it's width and height:
-        var image = new Image();
-        image.addEventListener('load', function() {
-            // Concatenate our HTML image info
-            // var imageInfo = file.name    +' '+ // get the value of `name` from the `file` Obj
-            //     image.width  +'×'+ // But get the width from our `image`
-            //     image.height +' '+
-            //     file.type    +' '+
-            //     Math.round(file.size/1024) +'KB';
+        reader.addEventListener('load', function() {
+            try {
+                const image = new Image();
+                image.addEventListener('load', function() {
+                    const { width, height } = image;
+                    if (useBlob) {
+                        window.URL.revokeObjectURL(image.src);
+                    }
 
-            //alert(imageInfo);
-            file.photoWidth = image.width;
-            file.photoHeight = image.height;
-            // Finally append our created image and the HTML info string to our `#preview`
-            //elPreview.appendChild( this );
-            //elPreview.insertAdjacentHTML("beforeend", imageInfo +'<br>');
+                    resolve([width, height]);
+                });
 
-            // If we set the variable `useBlob` to true:
-            // (Data-URLs can end up being really large
-            // `src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAA...........etc`
-            // Blobs are usually faster and the image src will hold a shorter blob name
-            // src="blob:http%3A//example.com/2a303acf-c34c-4d0a-85d4-2136eef7d723"
-            if (useBlob) {
-                // Free some memory for optimal performance
-                window.URL.revokeObjectURL(image.src);
+                image.src = useBlob ? window.URL.createObjectURL(file) : reader.result;
+            } catch {
+                reject();
             }
-
-            callback(file);
         });
 
-        image.src = useBlob ? window.URL.createObjectURL(file) : reader.result;
+        reader.readAsDataURL(file);
     });
-
-    // https://developer.mozilla.org/en-US/docs/Web/API/FileReader/readAsDataURL
-    reader.readAsDataURL(file);
-}
-
-function formatPhoneNumber(number) {
-    const unformattedNumber = number && number.startsWith('+') ? number : '+' + number;
-    const formattedNumber = formatNumber(unformattedNumber, 'International');
-    return formattedNumber || unformattedNumber;
 }
 
 /**
@@ -409,7 +391,7 @@ function getDurationString(secondsTotal) {
     return (hours > 0 ? hours + ':' : '') + minutes + ':' + seconds;
 }
 
-function getRandomInt(min, max) {
+export function getRandomInt(min, max) {
     min = Math.ceil(min);
     max = Math.floor(max);
     return Math.floor(Math.random() * (max - min)) + min; //The maximum is exclusive and the minimum is inclusive
@@ -433,11 +415,8 @@ function insertByOrder(array, element, comparator) {
 }
 
 export {
-    cleanProgressStatus,
-    isConnecting,
     getBrowser,
     getOSName,
-    isValidPhoneNumber,
     stringToBoolean,
     orderCompare,
     getSize,
@@ -449,13 +428,11 @@ export {
     debounce,
     getLetters,
     readImageSize,
-    formatPhoneNumber,
     arrayBufferToBase64,
     isAuthorizationReady,
     between,
     clamp,
     getDurationString,
-    getRandomInt,
     isAppleDevice,
     historyEquals,
     insertByOrder

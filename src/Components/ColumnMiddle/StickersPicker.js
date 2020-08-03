@@ -8,7 +8,7 @@
 import React from 'react';
 import * as ReactDOM from 'react-dom';
 import PropTypes from 'prop-types';
-import { compose } from 'recompose';
+import { compose } from '../../Utils/HOC';
 import { withRestoreRef, withSaveRef } from '../../Utils/HOC';
 import { withTranslation } from 'react-i18next';
 import StickerSet from './StickerSet';
@@ -76,6 +76,10 @@ class StickersPicker extends React.Component {
     componentWillUnmount() {
         StickerStore.off('updateInstalledStickerSets', this.onUpdateInstalledStickerSets);
         StickerStore.off('updateRecentStickers', this.onUpdateRecentStickers);
+    }
+
+    stop() {
+
     }
 
     onUpdateInstalledStickerSets = update => {
@@ -164,6 +168,7 @@ class StickersPicker extends React.Component {
     };
 
     loadInViewContent = (padding = 0) => {
+        // console.log('[sp] loadInViewContent');
         const scroll = this.scrollRef.current;
 
         const { sets } = this.state;
@@ -231,6 +236,7 @@ class StickersPicker extends React.Component {
     };
 
     handleScroll = async () => {
+        // console.log('[sp] handleScroll');
         //this.loadInViewContentOnScroll();
         this.loadInViewContentOnScrollEnd();
         this.updatePosition();
@@ -412,7 +418,7 @@ class StickersPicker extends React.Component {
     };
 
     render() {
-        const { t } = this.props;
+        const { t, style } = this.props;
         const { recent, stickerSets, sets, headerStickers } = this.state;
         // console.log('[sp] render', recent, stickerSets, sets);
         // if (!stickerSets) return null;
@@ -441,7 +447,7 @@ class StickersPicker extends React.Component {
                 : null;
 
         return (
-            <div className='stickers-picker'>
+            <div className='stickers-picker' style={style}>
                 <StickersPickerHeader onSelect={this.handleSelectSet} stickers={headerStickers} />
                 <div ref={this.scrollRef} className='stickers-picker-scroll' onScroll={this.handleScroll}>
                     {Boolean(recentInfo) && (

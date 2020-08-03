@@ -5,8 +5,98 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { THUMBNAIL_BLURRED_SIZE } from '../Constants';
+import { THUMBNAIL_BLURRED_SIZE_90 } from '../Constants';
 import MessageStore from '../Stores/MessageStore';
+import Animation from '../Components/Message/Media/Animation';
+import Audio from '../Components/Message/Media/Audio';
+import Call from '../Components/Message/Media/Call';
+import Contact from '../Components/Message/Media/Contact';
+import Document from '../Components/Message/Media/Document';
+import Game from '../Components/Message/Media/Game';
+import Location from '../Components/Message/Media/Location';
+import Photo from '../Components/Message/Media/Photo';
+import Poll from '../Components/Message/Media/Poll';
+import Sticker, { StickerSourceEnum } from '../Components/Message/Media/Sticker';
+import Venue from '../Components/Message/Media/Venue';
+import Video from '../Components/Message/Media/Video';
+import VideoNote from '../Components/Message/Media/VideoNote';
+import VoiceNote from '../Components/Message/Media/VoiceNote';
+import React from 'react';
+import { getRandomInt, readImageSize } from './Common';
+import FileStore from '../Stores/FileStore';
+import { ID3Parser } from '../Components/Player/Steaming/MP3/ID3Parser';
+
+const waveformCache = new Map();
+
+export function getNormalizedWaveform(data) {
+    if (waveformCache.has(data)) {
+        return waveformCache.get(data);
+    }
+
+    const bytes = Array.from(atob(data)).map(x => x.charCodeAt(0) & 0xFF);
+    const waveform = [];
+    const barsCount = Math.floor(bytes.length * 8 / 5);
+    for (let i = 0; i < barsCount; i++) {
+        const byteIndex = Math.floor(i * 5 / 8);
+        const barPadding = i * 5 % 8;
+
+        const bits = bytes[byteIndex] | (((byteIndex + 1 < bytes.length) ? bytes[byteIndex + 1] : 0) << 8);
+        waveform.push(((bits >>> barPadding) & 0x1F) / 31.0);
+    }
+
+    for (let i = 0; i < (100 - barsCount); i++) {
+        waveform.push(0);
+    }
+
+    waveformCache.set(data, waveform);
+
+    return waveform;
+}
+
+export function getCallTitle(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return null;
+
+    const { content, is_outgoing } = message;
+    if (content['@type'] !== 'messageCall') return null;
+
+    const { discard_reason, duration } = content;
+    if (is_outgoing) {
+        return discard_reason['@type'] === 'callDiscardReasonMissed' ? 'Cancelled Call' : 'Outgoing Call';
+    } else if (discard_reason['@type'] === 'callDiscardReasonMissed') {
+        return 'Missed Call';
+    } else if (discard_reason['@type'] === 'callDiscardReasonDeclined') {
+        return 'Declined Call';
+    }
+
+    return 'Incoming Call';
+}
+
+export function isEditedMedia(chatId, messageId) {
+    const message = MessageStore.get(chatId, messageId);
+    if (!message) return;
+
+    const { content } = message;
+    switch (content['@type']) {
+        case 'messageAnimation': {
+            return true;
+        }
+        case 'messageAudio': {
+            return true;
+        }
+        case 'messageDocument': {
+            return true;
+        }
+        case 'messagePhoto': {
+            return true;
+        }
+        case 'messageVideo': {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 export function isValidAnimatedSticker(sticker, chatId, messageId) {
     if (!sticker) return false;
@@ -21,10 +111,10 @@ export function isValidAnimatedSticker(sticker, chatId, messageId) {
     return true;
 }
 
-export function isBlurredThumbnail(thumbnail, blurredSize = THUMBNAIL_BLURRED_SIZE) {
+export function isBlurredThumbnail(thumbnail, blurredSize = THUMBNAIL_BLURRED_SIZE_90) {
     if (!thumbnail) return false;
 
-    return Math.max(thumbnail.width, thumbnail.height) <= blurredSize;
+    return Math.max(thumbnail.width, thumbnail.height) < blurredSize;
 }
 
 export function getAudioTitle(audio) {
@@ -37,6 +127,25 @@ export function getAudioTitle(audio) {
     return trimmedTitle || trimmedPerformer
         ? `${trimmedPerformer || 'Unknown Artist'} — ${trimmedTitle || 'Unknown Track'}`
         : file_name;
+}
+
+export function getAudioShortTitle(audio) {
+    if (!audio) return null;
+
+    const { file_name, title, performer } = audio;
+    const trimmedTitle = title ? title.trim() : '';
+    const trimmedPerformer = performer ? performer.trim() : '';
+
+    return trimmedTitle || trimmedPerformer ? `${trimmedPerformer || 'Unknown Artist'}` : file_name;
+}
+
+export function getAudioSubtitle(audio) {
+    if (!audio) return null;
+
+    const { title } = audio;
+    const trimmedTitle = title ? title.trim() : '';
+
+    return trimmedTitle || 'Unknown Track';
 }
 
 export function getStickers(sets) {
@@ -198,14 +307,14 @@ function toIndex(row, column, sets, stickersPerRow) {
 function getInputMediaThumbnail(thumbnail) {
     if (!thumbnail) return null;
 
-    const { photo, width, height } = thumbnail;
-    if (!photo) return null;
+    const { file, width, height } = thumbnail;
+    if (!file) return null;
 
     return {
         '@type': 'inputThumbnail',
         thumbnail: {
             '@type': 'inputFileId',
-            id: photo.id
+            id: file.id
         },
         width,
         height
@@ -388,4 +497,291 @@ export function getInputMediaContent(media, text) {
     }
 
     return null;
+}
+
+export function getMedia(message, openMedia, hasTitle = false, hasCaption = false, inlineMeta = null) {
+    if (!message) return null;
+
+    const { chat_id, id, content } = message;
+    if (!content) return null;
+
+    switch (content['@type']) {
+        case 'messageAnimation':
+            return (
+                <Animation
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    animation={content.animation}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messageAudio':
+            return (
+                <Audio
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    audio={content.audio}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        case 'messageCall':
+            return (
+                <Call
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    duraton={content.duration}
+                    discardReason={content.discard_reason}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        case 'messageContact':
+            return (
+                <Contact
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    contact={content.contact}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        case 'messageDocument':
+            return (
+                <Document
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    document={content.document}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        case 'messageGame':
+            return <Game chatId={chat_id} messageId={id} game={content.game} openMedia={openMedia} />;
+        case 'messageLocation':
+            return (
+                <Location
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    location={content.location}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messagePhoto':
+            return (
+                <Photo
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    photo={content.photo}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messagePoll':
+            return <Poll chatId={chat_id} messageId={id} poll={content.poll} openMedia={openMedia} meta={inlineMeta} />;
+        case 'messageSticker':
+            return (
+                <Sticker
+                    chatId={chat_id}
+                    messageId={id}
+                    sticker={content.sticker}
+                    source={StickerSourceEnum.MESSAGE}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messageText':
+            return null;
+        case 'messageVenue':
+            return (
+                <Venue
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    venue={content.venue}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        case 'messageVideo':
+            return (
+                <Video
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    video={content.video}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messageVideoNote':
+            return (
+                <VideoNote
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    videoNote={content.video_note}
+                    openMedia={openMedia}
+                />
+            );
+        case 'messageVoiceNote':
+            return (
+                <VoiceNote
+                    type='message'
+                    title={hasTitle}
+                    caption={hasCaption}
+                    chatId={chat_id}
+                    messageId={id}
+                    voiceNote={content.voice_note}
+                    openMedia={openMedia}
+                    meta={inlineMeta}
+                />
+            );
+        default:
+            return [`[${content['@type']}]`, inlineMeta];
+    }
+}
+
+export async function getMediaTags(file) {
+    return new Promise(async resolve => {
+        const tag = await new ID3Parser().parse(file);
+
+        const { tags } = tag;
+        const { artist, title } = tags;
+
+        const audio = document.createElement('audio');
+        const url = URL.createObjectURL(file);
+
+        audio.src = url;
+        audio.addEventListener('loadedmetadata', function(){
+            URL.revokeObjectURL(url);
+            const duration = audio.duration;
+            audio.src = null;
+            resolve({ title, performer : artist, duration : Math.trunc(duration) });
+        },false);
+        audio.addEventListener('error', function() {
+            resolve(null);
+        });
+    })
+}
+
+export async function getMediaDocumentFromFile(file) {
+    if (!file) {
+        return null;
+    }
+
+    const fileId = -getRandomInt(1, 1000000);
+    FileStore.setBlob(fileId, file);
+
+    const { name, type, size } = file;
+
+    if (type === 'audio/mp3') {
+        const tags = await getMediaTags(file);
+        if (tags) {
+            const { title, performer, duration } = tags;
+
+            return ({
+                '@type': 'messageAudio',
+                audio: {
+                    '@type': 'audio',
+                    duration,
+                    title,
+                    performer,
+                    file_name: name,
+                    mime_type: type,
+                    album_cover_minithumbnail: null,
+                    album_cover_thumbnail: null,
+                    audio: {
+                        '@type': 'file',
+                        id: fileId,
+                        size,
+                        expected_size: size,
+                        local: {
+                            is_downloading_completed: true
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    return ({
+        '@type': 'messageDocument',
+        document: {
+            '@type': 'document',
+            file_name: name,
+            mime_type: type,
+            minithumbnail: null,
+            thumbnail: null,
+            document: {
+                '@type': 'file',
+                id: fileId,
+                size,
+                expected_size: size,
+                local: {
+                    is_downloading_completed: true
+                }
+            }
+        }
+    });
+}
+
+export async function getMediaPhotoFromFile(file) {
+    if (!file) {
+        return null;
+    }
+
+    if (file.type.startsWith('image')) {
+        const [width, height] = await readImageSize(file);
+
+        const fileId = -getRandomInt(1, 1000000);
+        FileStore.setBlob(fileId, file);
+
+        const photoSize = {
+            '@type': 'photoSize',
+            photo: {
+                '@type': 'file',
+                id: fileId,
+                size: file.size,
+                expected_size: file.expected_size,
+                local: {
+                    is_downloading_completed: true
+                }
+            },
+            width,
+            height
+        };
+
+        return ({
+            '@type': 'messagePhoto',
+            photo: {
+                '@type': 'photo',
+                has_stickers: false,
+                minithumbnail: null,
+                sizes: [ photoSize ]
+            }
+        });
+    } else {
+        return null;
+    }
 }

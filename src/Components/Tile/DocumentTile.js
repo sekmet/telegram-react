@@ -8,29 +8,15 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import classNames from 'classnames';
-import withStyles from '@material-ui/core/styles/withStyles';
 import FileProgress from '../../Components/Viewer/FileProgress';
 import { getSrc } from '../../Utils/File';
 import FileStore from '../../Stores/FileStore';
 import './DocumentTile.css';
 
-const styles = theme => ({
-    background: {
-        background: theme.palette.primary.main,
-        borderRadius: '50%',
-        width: 48,
-        height: 48
-    }
-});
-
 class DocumentTile extends React.Component {
-    constructor(props) {
-        super(props);
-
-        this.state = {
-            loaded: false
-        };
-    }
+    state = {
+        loaded: false
+    };
 
     componentDidMount() {
         FileStore.on('clientUpdateDocumentThumbnailBlob', this.onClientUpdateDocumentThumbnailBlob);
@@ -38,15 +24,16 @@ class DocumentTile extends React.Component {
     }
 
     componentWillUnmount() {
-        FileStore.removeListener('clientUpdateDocumentThumbnailBlob', this.onClientUpdateDocumentThumbnailBlob);
-        FileStore.removeListener('clientUpdateAudioThumbnailBlob', this.onClientUpdateDocumentThumbnailBlob);
+        FileStore.off('clientUpdateDocumentThumbnailBlob', this.onClientUpdateDocumentThumbnailBlob);
+        FileStore.off('clientUpdateAudioThumbnailBlob', this.onClientUpdateDocumentThumbnailBlob);
     }
 
     onClientUpdateDocumentThumbnailBlob = update => {
         const { thumbnail } = this.props;
+
         if (!thumbnail) return;
 
-        const file = thumbnail.photo;
+        const { file } = thumbnail;
         if (!file) return;
 
         const { fileId } = update;
@@ -63,43 +50,48 @@ class DocumentTile extends React.Component {
     };
 
     render() {
-        const { classes, thumbnail, file, icon, completeIcon, openMedia } = this.props;
+        const { minithumbnail, thumbnail, file, icon, completeIcon, openMedia, streaming } = this.props;
         const { loaded } = this.state;
 
-        const thumbnailSrc = getSrc(thumbnail ? thumbnail.photo : null);
+        const miniSrc = minithumbnail ? 'data:image/jpeg;base64, ' + minithumbnail.data : null;
+        const thumbnailSrc = getSrc(thumbnail ? thumbnail.file : null);
         const tileLoaded = thumbnailSrc && loaded;
+        const src = thumbnailSrc || miniSrc;
 
         return (
             <div
-                className={classNames('document-tile', { 'document-tile-background': !thumbnailSrc })}
+                className={classNames('document-tile', { 'document-tile-image': !src }, { pointer: openMedia })}
                 onClick={openMedia}>
-                {!tileLoaded && <div className={classes.background} />}
-                {thumbnailSrc && (
-                    <img className='tile-photo' src={thumbnailSrc} onLoad={this.handleLoad} draggable={false} alt='' />
-                )}
                 {file && (
                     <FileProgress
                         file={file}
-                        thumbnailSrc={thumbnailSrc}
-                        download
+                        thumbnailSrc={src}
+                        download={!streaming}
                         upload
                         cancelButton
                         zIndex={1}
                         icon={icon}
-                        completeIcon={completeIcon}
+                        completeIcon={typeof completeIcon === 'function' ? completeIcon(src) : completeIcon}
                     />
                 )}
+                {src && <img className='tile-photo' src={src} onLoad={this.handleLoad} draggable={false} alt='' />}
+                {!tileLoaded && <div className='document-tile-background' />}
             </div>
         );
     }
 }
 
+DocumentTile.defaultProps = {
+    streaming: false
+};
+
 DocumentTile.propTypes = {
+    minithumbnail: PropTypes.object,
     thumbnail: PropTypes.object,
     file: PropTypes.object,
     openMedia: PropTypes.func,
     icon: PropTypes.node,
-    completeIcon: PropTypes.node
+    completeIcon: PropTypes.oneOfType([PropTypes.node, PropTypes.func])
 };
 
-export default withStyles(styles, { withTheme: true })(DocumentTile);
+export default DocumentTile;

@@ -8,9 +8,9 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
 import { withTranslation } from 'react-i18next';
+import ListItemIcon from '@material-ui/core/ListItemIcon';
+import ListItemText from '@material-ui/core/ListItemText';
 import MenuItem from '@material-ui/core/MenuItem';
 import MenuList from '@material-ui/core/MenuList';
 import Popover from '@material-ui/core/Popover';
@@ -19,8 +19,31 @@ import DialogContent from './DialogContent';
 import DialogBadge from './DialogBadge';
 import DialogTitle from './DialogTitle';
 import DialogMeta from './DialogMeta';
-import { isChatMuted, isChatSecret, isChatUnread } from '../../Utils/Chat';
-import { toggleChatIsMarkedAsUnread, toggleChatIsPinned, toggleChatNotificationSettings } from '../../Actions/Chat';
+import ArchiveIcon from '../../Assets/Icons/Archive';
+import UnarchiveIcon from '../../Assets/Icons/Unarchive';
+import PinIcon from '../../Assets/Icons/Pin2';
+import UnpinIcon from '../../Assets/Icons/Pin2';
+import MuteIcon from '../../Assets/Icons/Mute';
+import UnmuteIcon from '../../Assets/Icons/Unmute';
+import UserIcon from '../../Assets/Icons/User';
+import GroupIcon from '../../Assets/Icons/Group';
+import MessageIcon from '../../Assets/Icons/Message';
+import UnreadIcon from '../../Assets/Icons/Unread';
+import {
+    canAddChatToList,
+    isChatArchived,
+    isChatMuted,
+    isChatPinned,
+    isChatSecret,
+    isChatUnread,
+    isPrivateChat
+} from '../../Utils/Chat';
+import {
+    addChatToList,
+    toggleChatIsMarkedAsUnread,
+    toggleChatIsPinned,
+    toggleChatNotificationSettings
+} from '../../Actions/Chat';
 import { openChat } from '../../Actions/Client';
 import { viewMessages } from '../../Actions/Message';
 import ApplicationStore from '../../Stores/ApplicationStore';
@@ -29,62 +52,9 @@ import OptionStore from '../../Stores/OptionStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './Dialog.css';
 
-const styles = theme => ({
-    menuListRoot: {
-        minWidth: 150
-    },
-    statusRoot: {
-        position: 'absolute',
-        right: 1,
-        bottom: 1,
-        zIndex: 1
-    },
-    statusIcon: {},
-    iconIndicator: {
-        background: '#80d066'
-    },
-    verifiedIcon: {
-        color: theme.palette.primary.main
-    },
-    unreadIcon: {
-        background: theme.palette.primary.light
-    },
-    dialogActive: {
-        color: '#fff', //theme.palette.primary.contrastText,
-        backgroundColor: theme.palette.primary.main,
-        borderRadius: 8,
-        cursor: 'pointer',
-        margin: '0 12px',
-        '& $verifiedIcon': {
-            color: '#fff'
-        },
-        '& $unreadIcon': {
-            background: '#ffffff77'
-        },
-        '& $statusRoot': {
-            background: theme.palette.primary.main
-        },
-        '& $iconIndicator': {
-            background: '#ffffff'
-        }
-    },
-    dialog: {
-        borderRadius: 8,
-        cursor: 'pointer',
-        margin: '0 12px',
-        '&:hover': {
-            backgroundColor: theme.palette.primary.main + '22',
-            '& $statusRoot': {
-                background: theme.palette.type === 'dark' ? theme.palette.background.default : '#FFFFFF'
-            },
-            '& $statusIcon': {
-                background: theme.palette.primary.main + '22'
-            }
-        }
-    }
-});
-
 class Dialog extends Component {
+    static contextMenuId;
+
     constructor(props) {
         super(props);
 
@@ -92,7 +62,7 @@ class Dialog extends Component {
 
         const chat = ChatStore.get(this.props.chatId);
         this.state = {
-            chat: chat,
+            chat,
             contextMenu: false,
             left: 0,
             top: 0
@@ -100,26 +70,45 @@ class Dialog extends Component {
     }
 
     shouldComponentUpdate(nextProps, nextState) {
-        if (nextProps.chatId !== this.props.chatId) {
+        const { chatId, t, hidden, isLastPinned, chatList, style } = this.props;
+        const { contextMenu } = this.state;
+
+        if (nextProps.chatId !== chatId) {
+            // console.log('[vl] Dialog.shouldUpdate true chatId');
             return true;
         }
 
-        if (nextProps.t !== this.props.t) {
+        if (nextProps.t !== t) {
+            // console.log('[vl] Dialog.shouldUpdate true t');
             return true;
         }
 
-        if (nextProps.theme !== this.props.theme) {
+        if (nextProps.hidden !== hidden) {
+            // console.log('[vl] Dialog.shouldUpdate true hidden');
             return true;
         }
 
-        if (nextProps.hidden !== this.props.hidden) {
+        if (nextProps.isLastPinned !== isLastPinned) {
+            // console.log('[vl] Dialog.shouldUpdate true isLastPinned');
             return true;
         }
 
-        if (nextState.contextMenu !== this.state.contextMenu) {
+        if (nextState.contextMenu !== contextMenu) {
+            // console.log('[vl] Dialog.shouldUpdate true contextMenu');
             return true;
         }
 
+        if (nextState.chatList !== chatList) {
+            // console.log('[vl] Dialog.shouldUpdate true contextMenu');
+            return true;
+        }
+
+        if (nextProps.style && style && style.top !== nextProps.style.top) {
+            // console.log('[vl] Dialog.shouldUpdate true style');
+            return true;
+        }
+
+        // console.log('[vl] Dialog.shouldUpdate false');
         return false;
     }
 
@@ -128,7 +117,7 @@ class Dialog extends Component {
     }
 
     componentWillUnmount() {
-        ApplicationStore.removeListener('clientUpdateChatId', this.onClientUpdateChatId);
+        ApplicationStore.off('clientUpdateChatId', this.onClientUpdateChatId);
     }
 
     onClientUpdateChatId = update => {
@@ -150,21 +139,29 @@ class Dialog extends Component {
             event.preventDefault();
             event.stopPropagation();
         }
-        const { chatId } = this.props;
+        const { chatId, chatList } = this.props;
         const { contextMenu } = this.state;
 
         if (contextMenu) {
             this.setState({ contextMenu: false });
         } else {
+            const contextMenuId = new Date();
+            Dialog.contextMenuId = contextMenuId;
+
             const left = event.clientX;
             const top = event.clientY;
-            const chat = ChatStore.get(chatId);
-            const { is_pinned } = chat;
-            const canTogglePin = (await this.canPinChats(chatId)) || is_pinned;
+            const isPinned = isChatPinned(chatId, chatList);
+            const canTogglePin = (await this.canPinChats(chatId)) || isPinned;
+            const canToggleArchive = canAddChatToList(chatId);
+
+            if (Dialog.contextMenuId !== contextMenuId) {
+                return;
+            }
 
             this.setState({
                 contextMenu: true,
                 canTogglePin,
+                canToggleArchive,
                 left,
                 top
             });
@@ -188,27 +185,28 @@ class Dialog extends Component {
     };
 
     canPinChats = async chatId => {
-        const chat = ChatStore.get(chatId);
-        if (!chat) return false;
+        const { chatList } = this.props;
 
-        const pinnedSumMaxOption = OptionStore.get('pinned_chat_count_max');
+        const pinnedSumMaxOption = isChatArchived(chatId)
+            ? OptionStore.get('pinned_archived_chat_count_max')
+            : OptionStore.get('pinned_chat_count_max');
         if (!pinnedSumMaxOption) return false;
 
         const isSecret = isChatSecret(chatId);
         const chats = await TdLibController.send({
             '@type': 'getChats',
+            chat_list: chatList,
             offset_order: '9223372036854775807',
             offset_chat_id: 0,
-            limit: 15
+            limit: pinnedSumMaxOption.value + 10
         });
 
         const pinnedSum = chats.chat_ids.reduce((x, id) => {
             if (isChatSecret(id) !== isSecret) return x;
 
             const chat = ChatStore.get(id);
-            if (!chat) return x;
 
-            return x + (chat.is_pinned ? 1 : 0);
+            return x + (chat && isChatPinned(chat.id, chatList) ? 1 : 0);
         }, 0);
 
         return pinnedSum < pinnedSumMaxOption.value;
@@ -217,14 +215,21 @@ class Dialog extends Component {
     handlePin = async event => {
         this.handleCloseContextMenu(event);
 
+        const { chatId, chatList } = this.props;
+        const isPinned = isChatPinned(chatId, chatList);
+
+        if (!isPinned && !this.canPinChats(chatId)) return;
+
+        toggleChatIsPinned(chatId, chatList, !isPinned);
+    };
+
+    handleArchive = async event => {
+        this.handleCloseContextMenu(event);
+
         const { chatId } = this.props;
-        const chat = ChatStore.get(chatId);
-        if (!chat) return;
-        const { is_pinned } = chat;
+        if (!canAddChatToList(chatId)) return;
 
-        if (!is_pinned && !this.canPinChats(chatId)) return;
-
-        toggleChatIsPinned(chatId, !is_pinned);
+        addChatToList(chatId, { '@type': isChatArchived(chatId) ? 'chatListMain' : 'chatListArchive' });
     };
 
     getViewInfoTitle = () => {
@@ -281,45 +286,33 @@ class Dialog extends Component {
     };
 
     render() {
-        const { classes, chatId, showSavedMessages, hidden, t } = this.props;
-        const { contextMenu, left, top, canTogglePin } = this.state;
-
-        if (hidden) return null;
+        const { chatId, chatList, showSavedMessages, hidden, t, isLastPinned, style } = this.props;
+        const { contextMenu, left, top, canToggleArchive, canTogglePin } = this.state;
 
         const chat = ChatStore.get(chatId);
-        const { is_pinned } = chat;
+        const isPinned = isChatPinned(chatId, chatList);
         const currentChatId = ApplicationStore.getChatId();
         const isSelected = currentChatId === chatId;
         const isMuted = isChatMuted(chatId);
         const isUnread = isChatUnread(chatId);
+        const isArchived = isChatArchived(chatId);
         return (
             <div
                 ref={this.dialog}
-                className={classNames(
-                    isSelected ? classes.dialogActive : classes.dialog,
-                    isSelected ? 'dialog-active' : 'dialog'
-                )}
+                className={classNames('dialog', { 'item-selected': isSelected }, { 'dialog-hidden': hidden })}
                 onMouseDown={this.handleSelect}
-                onContextMenu={this.handleContextMenu}>
+                onContextMenu={this.handleContextMenu}
+                style={style}>
                 <div className='dialog-wrapper'>
-                    <ChatTile
-                        chatId={chatId}
-                        showSavedMessages={showSavedMessages}
-                        showOnline
-                        classes={{
-                            statusRoot: classes.statusRoot,
-                            statusIcon: classes.statusIcon,
-                            iconIndicator: classes.iconIndicator
-                        }}
-                    />
+                    <ChatTile chatId={chatId} dialog showSavedMessages={showSavedMessages} showOnline />
                     <div className='dialog-inner-wrapper'>
                         <div className='tile-first-row'>
-                            <DialogTitle chatId={chatId} classes={{ verifiedIcon: classes.verifiedIcon }} />
+                            <DialogTitle chatId={chatId} />
                             <DialogMeta chatId={chatId} />
                         </div>
                         <div className='tile-second-row'>
                             <DialogContent chatId={chatId} />
-                            <DialogBadge chatId={chatId} classes={{ unreadIcon: classes.unreadIcon }} />
+                            <DialogBadge chatId={chatId} chatList={chatList} />
                         </div>
                     </div>
                 </div>
@@ -337,15 +330,96 @@ class Dialog extends Component {
                         horizontal: 'left'
                     }}
                     onMouseDown={e => e.stopPropagation()}>
-                    <MenuList classes={{ root: classes.menuListRoot }} onClick={e => e.stopPropagation()}>
-                        {canTogglePin && (
-                            <MenuItem onClick={this.handlePin}>
-                                {is_pinned ? t('UnpinFromTop') : t('PinToTop')}
+                    <MenuList onClick={e => e.stopPropagation()}>
+                        {canToggleArchive && (
+                            <MenuItem onClick={this.handleArchive}>
+                                {isArchived ? (
+                                    <>
+                                        <ListItemIcon>
+                                            <UnarchiveIcon />
+                                        </ListItemIcon>
+                                        <ListItemText primary={t('Unarchive')} />
+                                    </>
+                                ) : (
+                                    <>
+                                        <ListItemIcon>
+                                            <ArchiveIcon />
+                                        </ListItemIcon>
+                                        <ListItemText primary={t('Archive')} />
+                                    </>
+                                )}
                             </MenuItem>
                         )}
-                        <MenuItem onClick={this.handleViewInfo}>{this.getViewInfoTitle()}</MenuItem>
-                        <MenuItem onClick={this.handleMute}>{isMuted ? t('Unmute') : t('Mute')}</MenuItem>
-                        <MenuItem onClick={this.handleRead}>{isUnread ? t('MarkAsRead') : t('MarkAsUnread')}</MenuItem>
+                        {canTogglePin && (
+                            <MenuItem onClick={this.handlePin}>
+                                {isPinned ? (
+                                    <>
+                                        <ListItemIcon>
+                                            <UnpinIcon />
+                                        </ListItemIcon>
+                                        <ListItemText primary={t('UnpinFromTop')} />
+                                    </>
+                                ) : (
+                                    <>
+                                        <ListItemIcon>
+                                            <PinIcon />
+                                        </ListItemIcon>
+                                        <ListItemText primary={t('PinToTop')} />
+                                    </>
+                                )}
+                            </MenuItem>
+                        )}
+                        <MenuItem onClick={this.handleViewInfo}>
+                            {isPrivateChat(chatId) ? (
+                                <>
+                                    <ListItemIcon>
+                                        <UserIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={this.getViewInfoTitle()} />
+                                </>
+                            ) : (
+                                <>
+                                    <ListItemIcon>
+                                        <GroupIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={this.getViewInfoTitle()} />
+                                </>
+                            )}
+                        </MenuItem>
+                        <MenuItem onClick={this.handleMute}>
+                            {isMuted ? (
+                                <>
+                                    <ListItemIcon>
+                                        <UnmuteIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={t('ChatsUnmute')} />
+                                </>
+                            ) : (
+                                <>
+                                    <ListItemIcon>
+                                        <MuteIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={t('ChatsMute')} />
+                                </>
+                            )}
+                        </MenuItem>
+                        <MenuItem onClick={this.handleRead}>
+                            {isUnread ? (
+                                <>
+                                    <ListItemIcon>
+                                        <MessageIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={t('MarkAsRead')} />
+                                </>
+                            ) : (
+                                <>
+                                    <ListItemIcon>
+                                        <UnreadIcon />
+                                    </ListItemIcon>
+                                    <ListItemText primary={t('MarkAsUnread')} />
+                                </>
+                            )}
+                        </MenuItem>
                     </MenuList>
                 </Popover>
             </div>
@@ -355,8 +429,11 @@ class Dialog extends Component {
 
 Dialog.propTypes = {
     chatId: PropTypes.number.isRequired,
+    chatList: PropTypes.object.isRequired,
     hidden: PropTypes.bool,
-    showSavedMessages: PropTypes.bool
+    showSavedMessages: PropTypes.bool,
+    isLastPinned: PropTypes.bool,
+    style: PropTypes.object
 };
 
 Dialog.defaultProps = {
@@ -364,9 +441,4 @@ Dialog.defaultProps = {
     showSavedMessages: true
 };
 
-const enhance = compose(
-    withStyles(styles, { withTheme: true }),
-    withTranslation()
-);
-
-export default enhance(Dialog);
+export default withTranslation()(Dialog);

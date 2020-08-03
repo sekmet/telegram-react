@@ -5,13 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { arrayBufferToBase64, isAuthorizationReady } from './Utils/Common';
-import Cookies from 'universal-cookie';
-import { OPTIMIZATIONS_FIRST_START } from './Constants';
-import ApplicationStore from './Stores/ApplicationStore';
-import NotificationStore from './Stores/NotificationStore';
-import TdLibController from './Controllers/TdLibController';
-
 // In production, we register a service worker to serve assets from local cache.
 
 // This lets the app load faster on subsequent visits in production, and gives
@@ -21,6 +14,12 @@ import TdLibController from './Controllers/TdLibController';
 
 // To learn more about the benefits of this model, read https://goo.gl/KwvDNy.
 // This link also includes instructions on opting out of this behavior.
+
+import { arrayBufferToBase64, isAuthorizationReady } from './Utils/Common';
+import { OPTIMIZATIONS_FIRST_START } from './Constants';
+import ApplicationStore from './Stores/ApplicationStore';
+import NotificationStore from './Stores/NotificationStore';
+import TdLibController from './Controllers/TdLibController';
 
 const isLocalhost =
     //false;
@@ -36,8 +35,7 @@ export default async function register() {
     console.log('[SW] Register');
 
     if (OPTIMIZATIONS_FIRST_START) {
-        const cookies = new Cookies();
-        cookies.set('register', true);
+        localStorage.setItem('register', 'true');
     }
 
     if ('serviceWorker' in navigator) {
@@ -66,7 +64,7 @@ export default async function register() {
 }
 
 async function registerValidSW(swUrl) {
-    console.log('[SW] RegisterValidSW');
+    console.log('[SW] register');
     try {
         const registration = await navigator.serviceWorker.register(swUrl);
         registration.onupdatefound = () => {
@@ -80,7 +78,7 @@ async function registerValidSW(swUrl) {
                         // available; please refresh." message in your web app.
                         console.log('[SW] New content is available; please refresh.');
 
-                        ApplicationStore.emit('clientUpdateNewContentAvailable');
+                        TdLibController.clientUpdate({ '@type': 'clientUpdateNewContentAvailable' });
                     } else {
                         // At this point, everything has been precached.
                         // It's the perfect time to display a
@@ -93,6 +91,7 @@ async function registerValidSW(swUrl) {
     } catch (error) {
         console.error('[SW] Error during service worker registration: ', error);
     }
+    console.log('[SW] register complete', navigator.serviceWorker, navigator.serviceWorker.controller);
 }
 
 export async function subscribeNotifications() {
@@ -134,13 +133,14 @@ export async function subscribeNotifications() {
 }
 
 async function checkValidServiceWorker(swUrl) {
-    console.log('[SW] CheckValidServiceWorker');
+    console.log('[SW] checkValid');
     // Check if the service worker can be found. If it can't reload the page.
     try {
         const response = await fetch(swUrl);
 
         // Ensure service worker exists, and that we really are getting a JS file.
         if (response.status === 404 || response.headers.get('content-type').indexOf('javascript') === -1) {
+            console.log('[SW] unregister');
             // No service worker found. Probably a different app. Reload the page.
             const registration = await navigator.serviceWorker.ready;
             await registration.unregister();
@@ -169,4 +169,97 @@ export async function update() {
 
         await registration.update();
     }
+}
+
+const requests = [];
+window.requests = requests;
+
+async function processRequest(request) {
+    const { fileId, offset, limit, resolve, reject } = request;
+
+    try {
+        await TdLibController.send({
+            '@type': 'downloadFile',
+            file_id: fileId,
+            priority: 1,
+            offset,
+            limit,
+            synchronous: true
+        });
+
+        const filePart = await TdLibController.send({
+            '@type': 'readFilePart',
+            file_id: fileId,
+            offset,
+            count: limit
+        });
+
+        const { data } = filePart;
+
+        resolve(data);
+    } catch (error) {
+        reject(error)
+    }
+}
+
+async function getFilePart(fileId, offset, limit) {
+    const promise = new Promise(async (resolve, reject) => {
+
+        requests.push({
+            fileId,
+            offset,
+            limit,
+            resolve,
+            reject
+        });
+
+        if (requests.length > 1) {
+            return;
+        }
+
+        while (requests.length > 0) {
+            const request = requests[requests.length - 1];
+
+            await processRequest(request);
+
+            const index = requests.indexOf(request);
+            requests.splice(index, 1);
+        }
+    });
+
+    return await promise;
+}
+
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.onmessage = async (e) => {
+        // console.log('[stream] client.onmessage', e.data);
+
+        switch (e.data['@type']) {
+            case 'getFile': {
+                const { fileId, offset, limit, start, end } = e.data;
+
+                try {
+                    const data = await getFilePart(fileId, offset, limit);
+
+                    navigator.serviceWorker.controller.postMessage({
+                        '@type': 'getFileResult',
+                        fileId,
+                        offset,
+                        limit,
+                        data
+                    });
+                } catch (error) {
+
+                    navigator.serviceWorker.controller.postMessage({
+                        '@type': 'getFileError',
+                        fileId,
+                        offset,
+                        limit,
+                        error
+                    });
+                }
+                break;
+            }
+        }
+    };
 }

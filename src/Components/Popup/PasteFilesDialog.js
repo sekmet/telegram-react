@@ -7,7 +7,7 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import { compose } from 'recompose';
+import { compose } from '../../Utils/HOC';
 import { withTranslation } from 'react-i18next';
 import Button from '@material-ui/core/Button';
 import Dialog from '@material-ui/core/Dialog';
@@ -15,6 +15,7 @@ import DialogTitle from '@material-ui/core/DialogTitle';
 import DialogContent from '@material-ui/core/DialogContent';
 import DialogContentText from '@material-ui/core/DialogContentText';
 import DialogActions from '@material-ui/core/DialogActions';
+import { modalManager } from '../../Utils/Modal';
 import './PasteFilesDialog.css';
 
 class PasteFilesDialog extends React.Component {
@@ -34,6 +35,7 @@ class PasteFilesDialog extends React.Component {
 
         return (
             <Dialog
+                manager={modalManager}
                 transitionDuration={0}
                 open={true}
                 onClose={this.handleCancel}
@@ -58,7 +60,7 @@ class PasteFilesDialog extends React.Component {
 }
 
 PasteFilesDialog.propTypes = {
-    files: PropTypes.array.isRequired,
+    files: PropTypes.array,
     onConfirm: PropTypes.func.isRequired,
     onCancel: PropTypes.func.isRequired
 };

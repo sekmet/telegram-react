@@ -7,48 +7,28 @@
 
 import React from 'react';
 import classNames from 'classnames';
-import { compose } from 'recompose';
-import withStyles from '@material-ui/core/styles/withStyles';
+import { compose } from '../../Utils/HOC';
+import withTheme from '@material-ui/core/styles/withTheme';
 import { withTranslation } from 'react-i18next';
 import Button from '@material-ui/core/Button';
 import IconButton from '@material-ui/core/IconButton';
-import InsertEmoticonIcon from '@material-ui/icons/InsertEmoticon';
+import InsertEmoticonIcon from '../../Assets/Icons/Smile';
 import { Picker as EmojiPicker } from 'emoji-mart';
+// import { NimblePicker as EmojiPicker } from 'emoji-mart';
+// import data from 'emoji-mart/data/messenger.json'
+import AnimationPreview from './AnimationPreview';
 import StickerPreview from './StickerPreview';
 import StickersPicker from './StickersPicker';
+import GifsPicker from './GifsPicker';
 import { isAppleDevice } from '../../Utils/Common';
-import { loadStickerThumbnailContent, loadStickerSetContent, loadRecentStickersContent } from '../../Utils/File';
+import { loadStickerThumbnailContent, loadStickerSetContent, loadRecentStickersContent, loadAnimationThumbnailContent } from '../../Utils/File';
 import { EMOJI_PICKER_TIMEOUT_MS } from '../../Constants';
-import ApplicationStore from '../../Stores/ApplicationStore';
+import AnimationStore from '../../Stores/AnimationStore';
+import AppStore from '../../Stores/ApplicationStore';
 import FileStore from '../../Stores/FileStore';
 import LocalizationStore from '../../Stores/LocalizationStore';
 import TdLibController from '../../Controllers/TdLibController';
 import './EmojiPickerButton.css';
-
-const styles = theme => ({
-    iconButton: {
-        margin: '8px 0px'
-    },
-    headerButton: {
-        borderRadius: 0,
-        flex: '50%'
-    },
-    pickerRoot: {
-        zIndex: theme.zIndex.modal,
-        width: 338,
-        overflowX: 'hidden',
-        backgroundColor: theme.palette.background.paper,
-        color: theme.palette.text.primary,
-        borderRadius: theme.shape.borderRadius,
-        boxShadow: theme.shadows[8],
-        position: 'absolute',
-        bottom: 80,
-        display: 'none'
-    },
-    pickerRootOpened: {
-        display: 'block'
-    }
-});
 
 class EmojiPickerButton extends React.Component {
     constructor(props) {
@@ -61,20 +41,27 @@ class EmojiPickerButton extends React.Component {
 
         this.emojiPickerRef = React.createRef();
         this.stickersPickerRef = React.createRef();
+        this.gifsPickerRef = React.createRef();
     }
 
     componentDidMount() {
-        ApplicationStore.on('clientUpdateThemeChange', this.onClientUpdateChange);
+        AppStore.on('clientUpdateThemeChange', this.onClientUpdateChange);
         LocalizationStore.on('clientUpdateLanguageChange', this.onClientUpdateChange);
     }
 
     componentWillUnmount() {
-        ApplicationStore.removeListener('clientUpdateThemeChange', this.onClientUpdateChange);
-        LocalizationStore.removeListener('clientUpdateLanguageChange', this.onClientUpdateChange);
+        AppStore.off('clientUpdateThemeChange', this.onClientUpdateChange);
+        LocalizationStore.off('clientUpdateLanguageChange', this.onClientUpdateChange);
     }
 
     onClientUpdateChange = update => {
-        this.picker = null;
+        const { open } = this.state;
+
+        if (open) {
+            this.removePicker = true;
+        } else {
+            this.picker = null;
+        }
     };
 
     handleButtonMouseEnter = event => {
@@ -84,7 +71,36 @@ class EmojiPickerButton extends React.Component {
 
             this.updatePicker(true);
             this.loadStickerSets();
+            this.loadSavedAnimations();
+
+            if (this.state.tab === 2) {
+                const gifsPicker = this.gifsPickerRef.current;
+                if (gifsPicker) {
+                    gifsPicker.start();
+                }
+            }
         }, EMOJI_PICKER_TIMEOUT_MS);
+    };
+
+    loadSavedAnimations = async () => {
+        let { savedAnimations } = AnimationStore;
+        if (!savedAnimations) {
+            const result = await TdLibController.send({
+                '@type': 'getSavedAnimations'
+            });
+
+            AnimationStore.savedAnimations = result;
+            savedAnimations = result;
+        }
+
+        // load content
+        const store = FileStore.getStore();
+        const previewAnimations = savedAnimations.animations.slice(0, 1000);
+
+        // console.log('[sp] loadAnimationThumbnailContent', previewAnimations);
+        previewAnimations.forEach(x => {
+            loadAnimationThumbnailContent(store, x);
+        });
     };
 
     loadStickerSets = async () => {
@@ -142,8 +158,8 @@ class EmojiPickerButton extends React.Component {
     };
 
     tryClosePicker = () => {
-        const { sticker } = this.state;
-        if (this.paperEnter || this.buttonEnter || sticker) return;
+        const { animation, sticker } = this.state;
+        if (this.paperEnter || this.buttonEnter || sticker || animation) return;
 
         this.updatePicker(false);
     };
@@ -162,22 +178,82 @@ class EmojiPickerButton extends React.Component {
     };
 
     updatePicker = open => {
-        this.setState({ open });
+        this.setState({ open }, () => {
+            if (!this.state.open) {
+                if (this.removePicker) {
+                    this.picker = null;
+                    this.removePicker = false;
+                }
+
+                const gifsPicker = this.gifsPickerRef.current;
+                if (gifsPicker) {
+                    gifsPicker.stop();
+                }
+            }
+        });
     };
 
     handleEmojiClick = () => {
         this.setState({ tab: 0 });
+
+        const gifsPicker = this.gifsPickerRef.current;
+        if (gifsPicker) {
+            gifsPicker.stop();
+        }
+
+        const stickersPicker = this.stickersPickerRef.current;
+        if (stickersPicker) {
+            stickersPicker.stop();
+        }
     };
 
     handleStickersClick = () => {
         const stickersPicker = this.stickersPickerRef.current;
         const { tab } = this.state;
 
-        stickersPicker.loadContent(this.recent, this.stickerSets, this.sets);
+        // console.log('[sp] handleStickersClick');
 
-        this.setState({ tab: 1 });
         if (tab === 1) {
-            stickersPicker.scrollTop();
+            if (stickersPicker) {
+                stickersPicker.scrollTop();
+            }
+        } else {
+            setTimeout(() => {
+                // console.log('[sp] handleStickersClick.loadContent');
+                stickersPicker.loadContent(this.recent, this.stickerSets, this.sets);
+            }, 150);
+
+            this.setState({ tab: 1 });
+        }
+
+        const gifsPicker = this.gifsPickerRef.current;
+        if (gifsPicker) {
+            gifsPicker.stop();
+        }
+    };
+
+    handleGifsClick = () => {
+        const gifsPicker = this.gifsPickerRef.current;
+        const { tab } = this.state;
+
+        if (tab === 2) {
+            if (gifsPicker) {
+                gifsPicker.scrollTop();
+            }
+        } else {
+            const { savedAnimations } = AnimationStore;
+
+            setTimeout(() => {
+                gifsPicker.loadContent(savedAnimations);
+                gifsPicker.start();
+            }, 150);
+
+            this.setState({ tab: 2 });
+        }
+
+        const stickersPicker = this.stickersPickerRef.current;
+        if (stickersPicker) {
+            stickersPicker.stop();
         }
     };
 
@@ -204,9 +280,32 @@ class EmojiPickerButton extends React.Component {
         }
     };
 
+    handleGifSend = animation => {
+        if (!animation) return;
+
+        TdLibController.clientUpdate({
+            '@type': 'clientUpdateAnimationSend',
+            animation
+        });
+
+        this.updatePicker(false);
+    };
+
+    handleGifPreview = animation => {
+        this.setState({ animation });
+        TdLibController.clientUpdate({
+            '@type': 'clientUpdateAnimationPreview',
+            animation
+        });
+
+        if (!animation) {
+            this.tryClosePicker();
+        }
+    };
+
     render() {
-        const { classes, theme, t } = this.props;
-        const { open, tab, sticker } = this.state;
+        const { theme, t } = this.props;
+        const { open, tab, animation, sticker } = this.state;
 
         if (open && !this.picker) {
             const i18n = {
@@ -231,6 +330,7 @@ class EmojiPickerButton extends React.Component {
             this.picker = (
                 <EmojiPicker
                     ref={this.emojiPickerRef}
+                    // data={data}
                     set='apple'
                     showPreview={false}
                     showSkinTones={false}
@@ -238,7 +338,7 @@ class EmojiPickerButton extends React.Component {
                     color={theme.palette.primary.dark}
                     i18n={i18n}
                     native={isAppleDevice()}
-                    style={{ width: 338, overflowX: 'hidden' }}
+                    style={{ width: 338, overflowX: 'hidden', position: 'absolute', left: 0, top: 0 }}
                 />
             );
 
@@ -247,6 +347,16 @@ class EmojiPickerButton extends React.Component {
                     ref={this.stickersPickerRef}
                     onSelect={this.handleStickerSend}
                     onPreview={this.handleStickerPreview}
+                    style={{ position: 'absolute', left: 338, top: 0 }}
+                />
+            );
+
+            this.gifsPicker = (
+                <GifsPicker
+                    ref={this.gifsPickerRef}
+                    onSelect={this.handleGifSend}
+                    onPreview={this.handleGifPreview}
+                    style={{ width: 338, overflowX: 'hidden', position: 'absolute', left: 676, top: 0 }}
                 />
             );
         }
@@ -259,35 +369,43 @@ class EmojiPickerButton extends React.Component {
                     href={theme.palette.type === 'dark' ? 'emoji-mart.dark.css' : 'emoji-mart.light.css'}
                 />
                 <IconButton
-                    className={classes.iconButton}
+                    className='inputbox-icon-button'
                     aria-label='Emoticon'
                     onMouseEnter={this.handleButtonMouseEnter}
                     onMouseLeave={this.handleButtonMouseLeave}>
                     <InsertEmoticonIcon />
                 </IconButton>
                 <div
-                    className={classNames(classes.pickerRoot, { [classes.pickerRootOpened]: open })}
+                    className={classNames('emoji-picker-root', { 'emoji-picker-root-opened': open })}
                     onMouseEnter={this.handlePaperMouseEnter}
                     onMouseLeave={this.handlePaperMouseLeave}>
+                    <div className={classNames('emoji-picker-content', { 'emoji-picker-content-stickers': tab === 1 }, { 'emoji-picker-content-gifs': tab === 2 })}>
+                        {this.picker}
+                        {this.stickersPicker}
+                        {this.gifsPicker}
+                    </div>
                     <div className='emoji-picker-header'>
                         <Button
                             color={tab === 0 ? 'primary' : 'default'}
-                            className={classes.headerButton}
+                            className='emoji-picker-header-button'
                             onClick={this.handleEmojiClick}>
                             {t('Emoji')}
                         </Button>
                         <Button
                             color={tab === 1 ? 'primary' : 'default'}
-                            className={classes.headerButton}
+                            className='emoji-picker-header-button'
                             onClick={this.handleStickersClick}>
-                            {t('Stickers')}
+                            {t('AccDescrStickers')}
+                        </Button>
+                        <Button
+                            color={tab === 2 ? 'primary' : 'default'}
+                            className='emoji-picker-header-button'
+                            onClick={this.handleGifsClick}>
+                            {t('AttachGif')}
                         </Button>
                     </div>
-                    <div className={classNames('emoji-picker-content', { 'emoji-picker-content-stickers': tab === 1 })}>
-                        {this.picker}
-                        {this.stickersPicker}
-                    </div>
                     {Boolean(sticker) && <StickerPreview sticker={sticker} />}
+                    {Boolean(animation) && <AnimationPreview animation={animation} />}
                 </div>
             </>
         );
@@ -295,8 +413,8 @@ class EmojiPickerButton extends React.Component {
 }
 
 const enhance = compose(
-    withStyles(styles, { withTheme: true }),
-    withTranslation()
+    withTranslation(),
+    withTheme
 );
 
 export default enhance(EmojiPickerButton);

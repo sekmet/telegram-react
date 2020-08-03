@@ -7,16 +7,17 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import ArrowDownwardIcon from '@material-ui/icons/ArrowDownward';
-import PlayArrowIcon from '@material-ui/icons/PlayArrow';
-import PauseIcon from '@material-ui/icons/Pause';
+import classNames from 'classnames';
+import DownloadIcon from '../../../Assets/Icons/Download';
+import PlayArrowIcon from '../../../Assets/Icons/PlayArrow';
+import PauseIcon from '../../../Assets/Icons/Pause';
 import DocumentTile from '../../Tile/DocumentTile';
 import AudioAction from './AudioAction';
-import FileProgress from '../../Viewer/FileProgress';
-import { getAudioTitle } from '../../../Utils/Media';
+import VoiceNoteSlider from './VoiceNoteSlider';
+import { getAudioShortTitle, getAudioSubtitle } from '../../../Utils/Media';
+import { supportsStreaming } from '../../../Utils/File';
 import PlayerStore from '../../../Stores/PlayerStore';
 import './Audio.css';
-import InsertDriveFileIcon from './Document';
 
 class Audio extends React.Component {
     constructor(props) {
@@ -24,33 +25,23 @@ class Audio extends React.Component {
 
         const { chatId, messageId } = props;
 
-        const { time, message, playing } = PlayerStore;
+        const { message, playing } = PlayerStore;
         const active = message && message.chat_id === chatId && message.id === messageId;
 
         this.state = {
-            active: active,
-            playing: active ? playing : false,
-            currentTime: active && time ? time.currentTime : 0,
-            duration: active && time ? time.duration : 0
+            active,
+            playing: active ? playing : false
         };
     }
 
     shouldComponentUpdate(nextProps, nextState, nextContext) {
-        const { active, playing, currentTime, duration } = this.state;
+        const { active, playing } = this.state;
 
         if (nextState.active !== active) {
             return true;
         }
 
         if (nextState.playing !== playing) {
-            return true;
-        }
-
-        if (nextState.currentTime !== currentTime) {
-            return true;
-        }
-
-        if (nextState.duration !== duration) {
             return true;
         }
 
@@ -65,10 +56,10 @@ class Audio extends React.Component {
     }
 
     componentWillUnmount() {
-        PlayerStore.removeListener('clientUpdateMediaActive', this.onClientUpdateMediaActive);
-        PlayerStore.removeListener('clientUpdateMediaPlay', this.onClientUpdateMediaPlay);
-        PlayerStore.removeListener('clientUpdateMediaPause', this.onClientUpdateMediaPause);
-        PlayerStore.removeListener('clientUpdateMediaEnd', this.onClientUpdateMediaEnd);
+        PlayerStore.off('clientUpdateMediaActive', this.onClientUpdateMediaActive);
+        PlayerStore.off('clientUpdateMediaPlay', this.onClientUpdateMediaPlay);
+        PlayerStore.off('clientUpdateMediaPause', this.onClientUpdateMediaPause);
+        PlayerStore.off('clientUpdateMediaEnd', this.onClientUpdateMediaEnd);
     }
 
     onClientUpdateMediaEnd = update => {
@@ -77,8 +68,7 @@ class Audio extends React.Component {
         if (chatId === update.chatId && messageId === update.messageId) {
             this.setState({
                 active: false,
-                playing: false,
-                currentTime: 0
+                playing: false
             });
         }
     };
@@ -108,44 +98,54 @@ class Audio extends React.Component {
             if (!this.state.active) {
                 this.setState({
                     active: true,
-                    currentTime: 0,
                     playing: true
                 });
             }
         } else if (this.state.active) {
             this.setState({
                 active: false,
-                currentTime: 0,
                 playing: false
             });
         }
     };
 
     render() {
-        const { chatId, messageId, audio, openMedia } = this.props;
-        const { playing } = this.state;
+        const { chatId, messageId, audio, openMedia, title, meta, caption } = this.props;
+        const { playing, active } = this.state;
         if (!audio) return null;
 
         const { album_cover_thumbnail, duration, audio: file } = audio;
 
-        const title = getAudioTitle(audio);
+        const audioTitle = getAudioSubtitle(audio);
+        const audioSubtitle = getAudioShortTitle(audio);
+        const completeIcon = playing ? <PauseIcon /> : <PlayArrowIcon />;
 
         return (
-            <div className='document'>
+            <div className={classNames('audio', 'document', { 'media-title': title })}>
                 <DocumentTile
                     thumbnail={album_cover_thumbnail}
                     file={file}
                     openMedia={openMedia}
-                    icon={<ArrowDownwardIcon />}
-                    completeIcon={playing ? <PauseIcon /> : <PlayArrowIcon />}
+                    streaming={supportsStreaming()}
+                    icon={supportsStreaming() ? completeIcon : <DownloadIcon />}
+                    completeIcon={completeIcon}
                 />
-                <div className='document-content'>
+                <div className='audio-content'>
                     <div className='document-title'>
-                        <a className='document-name' onClick={openMedia} title={title}>
-                            {title}
+                        <a className='document-name' onClick={openMedia} title={audioTitle}>
+                            {audioTitle}
                         </a>
                     </div>
-                    <AudioAction chatId={chatId} messageId={messageId} duration={duration} file={file} />
+                    <div className='audio-action' style={{ opacity: active ? 0 : 1 }}>{audioSubtitle}</div>
+                    <VoiceNoteSlider audio className='audio-slider' chatId={chatId} messageId={messageId} duration={duration} style={{ opacity: active ? 1 : 0 }}/>
+                    <AudioAction
+                        chatId={chatId}
+                        messageId={messageId}
+                        duration={duration}
+                        file={file}
+                        meta={caption ? null : meta}
+                        streaming={supportsStreaming()}
+                    />
                 </div>
             </div>
         );
